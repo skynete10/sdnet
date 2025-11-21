@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   Box,
   Paper,
@@ -23,6 +23,7 @@ import {
   TableCell,
   TableBody,
   TableContainer,
+  TableSortLabel,
 } from "@mui/material";
 
 const tableFontFamily =
@@ -87,6 +88,17 @@ const DEMO_ROWS: InternetRecord[] = [
   },
 ];
 
+type Order = "asc" | "desc";
+type SortKey =
+  | "username"
+  | "fullname"
+  | "city"
+  | "village"
+  | "due_date"
+  | "amount"
+  | "payment"
+  | "status";
+
 const InternnetManagerForm: React.FC = () => {
   const [filterDate, setFilterDate] = useState<string>("");
   const [selectedAddresses, setSelectedAddresses] = useState<string[]>([]);
@@ -95,8 +107,150 @@ const InternnetManagerForm: React.FC = () => {
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>("");
   const [searchName, setSearchName] = useState<string>("");
 
-  // later you can apply filters to rows here
+  const [order, setOrder] = useState<Order>("asc");
+  const [orderBy, setOrderBy] = useState<SortKey>("username");
+
   const rows = DEMO_ROWS;
+
+  const handleRequestSort = (property: SortKey) => {
+    const isAsc = orderBy === property && order === "asc";
+    setOrder(isAsc ? "desc" : "asc");
+    setOrderBy(property);
+  };
+
+  const filteredAndSortedRows = useMemo(() => {
+    const today = new Date();
+    const todayDateOnly = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate()
+    );
+
+    const filtered = rows.filter((row) => {
+      // Name / username search
+      const nameMatch =
+        !searchName ||
+        row.fullname.toLowerCase().includes(searchName.toLowerCase()) ||
+        row.username.toLowerCase().includes(searchName.toLowerCase());
+
+      // City filter (Addresses)
+      const addressMatch =
+        selectedAddresses.length === 0 ||
+        selectedAddresses.includes(row.city);
+
+      // Active / Stopped switch
+      const statusFilter = isActive ? "active" : "stopped";
+      const statusMatch = row.status === statusFilter;
+
+      // Payment radio
+      const paymentMatch =
+        paymentStatus === "" ||
+        paymentStatus === "all" ||
+        row.payment === paymentStatus;
+
+      // Date picker (exact due date)
+      const dateMatch =
+        !filterDate || row.due_date === filterDate; // same YYYY-MM-DD
+
+      // Due date bucket (Today, This Week, This Month, Overdue)
+      const due = new Date(row.due_date);
+      const dueDateOnly = new Date(
+        due.getFullYear(),
+        due.getMonth(),
+        due.getDate()
+      );
+      const diffMs = dueDateOnly.getTime() - todayDateOnly.getTime();
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+      const isToday = diffDays === 0;
+      const isThisWeek = diffDays > 0 && diffDays <= 7;
+      const isThisMonth =
+        dueDateOnly.getFullYear() === todayDateOnly.getFullYear() &&
+        dueDateOnly.getMonth() === todayDateOnly.getMonth();
+      const isOverdue = diffDays < 0;
+
+      const dueBucketMatch =
+        selectedDueDates.length === 0 ||
+        selectedDueDates.some((opt) => {
+          if (opt === "Today") return isToday;
+          if (opt === "This Week") return isThisWeek;
+          if (opt === "This Month") return isThisMonth;
+          if (opt === "Overdue") return isOverdue;
+          return false;
+        });
+
+      return (
+        nameMatch &&
+        addressMatch &&
+        statusMatch &&
+        paymentMatch &&
+        dateMatch &&
+        dueBucketMatch
+      );
+    });
+
+    return [...filtered].sort((a, b) => {
+      const aRaw = a[orderBy] as any;
+      const bRaw = b[orderBy] as any;
+
+      if (orderBy === "amount") {
+        const aNum = Number(aRaw ?? 0);
+        const bNum = Number(bRaw ?? 0);
+        if (aNum < bNum) return order === "asc" ? -1 : 1;
+        if (aNum > bNum) return order === "asc" ? 1 : -1;
+        return 0;
+      }
+
+      const aVal = (aRaw ?? "").toString().toLowerCase();
+      const bVal = (bRaw ?? "").toString().toLowerCase();
+
+      if (aVal < bVal) return order === "asc" ? -1 : 1;
+      if (aVal > bVal) return order === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [
+    rows,
+    searchName,
+    selectedAddresses,
+    selectedDueDates,
+    isActive,
+    paymentStatus,
+    filterDate,
+    order,
+    orderBy,
+  ]);
+
+  const renderSortableHeaderCell = (
+    label: string,
+    property: SortKey,
+    align: "left" | "right" = "left"
+  ) => (
+    <TableCell
+      align={align}
+      sx={{
+        fontFamily: tableFontFamily,
+        fontWeight: 700,
+        fontSize: "0.95rem",
+        color: "#fff",
+        whiteSpace: "nowrap",
+        userSelect: "none",
+      }}
+      sortDirection={orderBy === property ? order : false}
+    >
+      <TableSortLabel
+        active={orderBy === property}
+        direction={orderBy === property ? order : "asc"}
+        onClick={() => handleRequestSort(property)}
+        sx={{
+          "&.MuiTableSortLabel-root": { color: "#fff" },
+          "&.MuiTableSortLabel-root.Mui-active": { color: "#fff" },
+          "& .MuiTableSortLabel-icon": { color: "#fff !important" },
+        }}
+      >
+        {label}
+      </TableSortLabel>
+    </TableCell>
+  );
 
   return (
     <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
@@ -318,9 +472,7 @@ const InternnetManagerForm: React.FC = () => {
               row
               value={paymentStatus}
               onChange={(e) =>
-                setPaymentStatus(
-                  e.target.value as PaymentStatus
-                )
+                setPaymentStatus(e.target.value as PaymentStatus)
               }
             >
               <FormControlLabel
@@ -372,53 +524,73 @@ const InternnetManagerForm: React.FC = () => {
         </Stack>
       </Paper>
 
-      {/* Main content area with table */}
+      {/* Main content area with datagrid-style table */}
       <Paper
         sx={{
-          p: 3,
           borderRadius: 2,
           boxShadow: 3,
+          overflow: "hidden",
           fontFamily: tableFontFamily,
-          minHeight: "50vh",
-          display: "flex",
-          flexDirection: "column",
         }}
       >
-        <Typography
-          variant="subtitle1"
-          sx={{ fontWeight: 600, mb: 1, color: "text.secondary" }}
+        <Box sx={{ p: 2 }}>
+          <Typography
+            variant="subtitle1"
+            sx={{ fontWeight: 600, mb: 1, color: "text.secondary" }}
+          >
+            Internet Manager Panel
+          </Typography>
+          <Divider />
+        </Box>
+
+        <TableContainer
+          sx={{
+            maxHeight: "60vh",
+            fontFamily: tableFontFamily,
+            userSelect: "none",
+          }}
         >
-          Internet Manager Panel
-        </Typography>
-
-        <Divider sx={{ mb: 2 }} />
-
-        <TableContainer sx={{ maxHeight: "60vh" }}>
           <Table
             size="small"
             stickyHeader
             sx={{
               "& td, & th": {
                 fontFamily: tableFontFamily,
-                fontSize: "0.9rem",
               },
             }}
           >
             <TableHead>
-              <TableRow>
-                <TableCell>Username</TableCell>
-                <TableCell>Full Name</TableCell>
-                <TableCell>City</TableCell>
-                <TableCell>Village</TableCell>
-                <TableCell>Due Date</TableCell>
-                <TableCell align="right">Amount</TableCell>
-                <TableCell>Invoiced</TableCell>
-                <TableCell>Payment</TableCell>
-                <TableCell>Status</TableCell>
+              <TableRow
+                sx={{
+                  "& th": {
+                    backgroundColor: "#004d40",
+                  },
+                }}
+              >
+                {renderSortableHeaderCell("Username", "username")}
+                {renderSortableHeaderCell("Full Name", "fullname")}
+                {renderSortableHeaderCell("City", "city")}
+                {renderSortableHeaderCell("Village", "village")}
+                {renderSortableHeaderCell("Due Date", "due_date")}
+                {renderSortableHeaderCell("Amount", "amount", "right")}
+                {renderSortableHeaderCell("Payment", "payment")}
+                {renderSortableHeaderCell("Status", "status")}
+                <TableCell
+                  sx={{
+                    fontFamily: tableFontFamily,
+                    fontWeight: 700,
+                    fontSize: "0.95rem",
+                    color: "#fff",
+                    whiteSpace: "nowrap",
+                    userSelect: "none",
+                  }}
+                >
+                  Invoiced
+                </TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {rows.length === 0 ? (
+              {filteredAndSortedRows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={9} align="center">
                     <Typography
@@ -431,26 +603,66 @@ const InternnetManagerForm: React.FC = () => {
                   </TableCell>
                 </TableRow>
               ) : (
-                rows.map((row) => (
-                  <TableRow key={row.id} hover>
-                    <TableCell>{row.username}</TableCell>
-                    <TableCell>{row.fullname}</TableCell>
-                    <TableCell>{row.city}</TableCell>
-                    <TableCell>{row.village}</TableCell>
-                    <TableCell>{row.due_date}</TableCell>
-                    <TableCell align="right">
+                filteredAndSortedRows.map((row, index) => (
+                  <TableRow
+                    key={row.id}
+                    hover
+                    tabIndex={-1}
+                    sx={{
+                      backgroundColor:
+                        index % 2 === 0 ? "background.paper" : "#f5f5f5",
+                      "&:hover": {
+                        backgroundColor: "#e0f2f1",
+                      },
+                      "&:focus": {
+                        outline: "none",
+                      },
+                      cursor: "default",
+                    }}
+                  >
+                    <TableCell
+                      sx={{
+                        fontSize: "0.9rem",
+                        fontWeight: 500,
+                      }}
+                    >
+                      {row.username}
+                    </TableCell>
+                    <TableCell
+                      sx={{
+                        fontSize: "0.9rem",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {row.fullname}
+                    </TableCell>
+                    <TableCell sx={{ fontSize: "0.9rem" }}>
+                      {row.city}
+                    </TableCell>
+                    <TableCell sx={{ fontSize: "0.9rem" }}>
+                      {row.village}
+                    </TableCell>
+                    <TableCell sx={{ fontSize: "0.9rem" }}>
+                      {row.due_date}
+                    </TableCell>
+                    <TableCell
+                      align="right"
+                      sx={{ fontSize: "0.9rem", fontWeight: 500 }}
+                    >
                       {row.amount.toFixed(2)}
                     </TableCell>
-                    <TableCell>{row.invoiced ? "Yes" : "No"}</TableCell>
-                    <TableCell>
+                    <TableCell sx={{ fontSize: "0.9rem" }}>
                       {row.payment === "paid"
                         ? "Paid"
                         : row.payment === "partial"
                         ? "Partial"
                         : "Unpaid"}
                     </TableCell>
-                    <TableCell>
+                    <TableCell sx={{ fontSize: "0.9rem" }}>
                       {row.status === "active" ? "Active" : "Stopped"}
+                    </TableCell>
+                    <TableCell sx={{ fontSize: "0.9rem" }}>
+                      {row.invoiced ? "Yes" : "No"}
                     </TableCell>
                   </TableRow>
                 ))

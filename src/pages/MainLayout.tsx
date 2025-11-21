@@ -12,6 +12,8 @@ import ExpensesForm from "./ExpensesForm";
 import EmployeeSalaryForm from "./EmployeeSalaryForm";
 import SettingsForm from "./SettingsForm";
 import InternnetManagerForm from "./InternnetManagerForm";
+import ServicesForm from "./ServicesForm";
+import CustomerSubscriptionForm from "./CustomerSubscriptionForm";
 
 const MainLayout: React.FC = () => {
   return (
@@ -36,6 +38,8 @@ const MainLayout: React.FC = () => {
           <Route path="/employesal" element={<EmployeeSalaryForm />} />
           <Route path="/settings" element={<SettingsForm />} />
           <Route path="/internetmanag" element={<InternnetManagerForm />}/>
+          <Route path="/services" element={<ServicesForm />}/>
+          <Route path="/customerssub" element={<CustomerSubscriptionForm />}/>
           {/* add more routes here later */}
         </Routes>
       </Box>

@@ -24,13 +24,17 @@ import PaymentsIcon from "@mui/icons-material/Payments";
 import WifiIcon from "@mui/icons-material/Wifi";
 import SettingsIcon from "@mui/icons-material/Settings";
 import LogoutIcon from "@mui/icons-material/Logout";
+import SubscriptionsIcon from "@mui/icons-material/Subscriptions";
+import BuildIcon from "@mui/icons-material/Build";
 
 type NavKey =
   | "dashboard"
   | "customers"
+  | "customers_subscription"
   | "suppliers"
   | "employees"
   | "items"
+  | "services"         
   | "sales_invoice"
   | "purchase_invoice"
   | "expenses"
@@ -45,19 +49,36 @@ const HeaderBar: React.FC = () => {
   const [selected, setSelected] = useState<NavKey>("dashboard");
 
   const navItems: { key: NavKey; label: string; icon: React.ReactNode }[] = [
-    { key: "dashboard", label: "Dashboard", icon: <DashboardIcon /> },
-    { key: "customers", label: "Customers", icon: <PeopleIcon /> },
-    { key: "suppliers", label: "Suppliers", icon: <LocalShippingIcon /> },
-    { key: "employees", label: "Employees", icon: <BadgeIcon /> },
-    { key: "items", label: "Items", icon: <Inventory2Icon /> },
-    { key: "sales_invoice", label: "Sales Invoice", icon: <ReceiptLongIcon /> },
-    { key: "purchase_invoice", label: "Purchase Invoice", icon: <ShoppingCartIcon /> },
-    { key: "expenses", label: "Expenses", icon: <AccountBalanceWalletIcon /> },
-    { key: "employees_salary", label: "Employees Salary", icon: <PaymentsIcon /> },
-    { key: "internet_manager", label: "Internet Manager", icon: <WifiIcon /> },
-    { key: "settings", label: "Settings", icon: <SettingsIcon /> },
-    { key: "logout", label: "Logout", icon: <LogoutIcon /> },
-  ];
+  { key: "dashboard", label: "Dashboard", icon: <DashboardIcon /> },
+  { key: "customers", label: "Customers", icon: <PeopleIcon /> },
+  {
+    key: "customers_subscription",
+    label: "Customers Subscription",
+    icon: <SubscriptionsIcon />,
+  },
+  { key: "suppliers", label: "Suppliers", icon: <LocalShippingIcon /> },
+  { key: "employees", label: "Employees", icon: <BadgeIcon /> },
+  { key: "items", label: "Items", icon: <Inventory2Icon /> },
+
+  
+  { key: "services", label: "Services", icon: <BuildIcon /> },
+
+  { key: "sales_invoice", label: "Sales Invoice", icon: <ReceiptLongIcon /> },
+  {
+    key: "purchase_invoice",
+    label: "Purchase Invoice",
+    icon: <ShoppingCartIcon />,
+  },
+  { key: "expenses", label: "Expenses", icon: <AccountBalanceWalletIcon /> },
+  {
+    key: "employees_salary",
+    label: "Employees Salary",
+    icon: <PaymentsIcon />,
+  },
+  { key: "internet_manager", label: "Internet Manager", icon: <WifiIcon /> },
+  { key: "settings", label: "Settings", icon: <SettingsIcon /> },
+  { key: "logout", label: "Logout", icon: <LogoutIcon /> },
+];
 
   const handleClick = (key: NavKey) => {
     setSelected(key);
@@ -68,6 +89,9 @@ const HeaderBar: React.FC = () => {
         break;
       case "customers":
         navigate("/customers");
+        break;
+      case "customers_subscription":
+        navigate("/customerssub"); // adjust route if needed
         break;
       case "suppliers":
         navigate("/suppliers");
@@ -87,11 +111,13 @@ const HeaderBar: React.FC = () => {
       case "internet_manager":
         navigate("/internetmanag");
         break;
+      case "services":
+        navigate("/services");
+        break;
       case "logout":
         navigate("/");
         break;
       default:
-        // later: wire suppliers, employees, etc.
         break;
     }
   };
@@ -190,9 +216,7 @@ const HeaderBar: React.FC = () => {
                       minWidth: 34,
                     },
                     "&:hover": {
-                      bgcolor: isSelected
-                        ? bgColor
-                        : "rgba(51,65,85,0.85)",
+                      bgcolor: isSelected ? bgColor : "rgba(51,65,85,0.85)",
                     },
                     transition:
                       "background-color 0.15s ease, transform 0.08s ease",
