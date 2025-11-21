@@ -25,6 +25,7 @@ import axios from "axios";
 const API_BASE_URL = "http://127.0.0.1:5100";
 
 type ServiceStatus = "active" | "inactive";
+type Currency = "USD" | "LBP";
 
 type Service = {
   idservice: number;
@@ -32,6 +33,7 @@ type Service = {
   service_name: string;
   service_price: number;
   service_status: ServiceStatus;
+  service_currency: Currency; // 👈 now part of row
 };
 
 type NewService = {
@@ -39,6 +41,7 @@ type NewService = {
   service_name: string;
   service_price: string; // use string for controlled TextField
   service_status: ServiceStatus;
+  service_currency: Currency;
 };
 
 type FormErrors = Partial<Record<keyof NewService, string>>;
@@ -49,13 +52,18 @@ type SaveServicePayload = {
   service_name: string;
   service_price: string | number;
   service_status: ServiceStatus;
+  service_currency: Currency;
 };
 
 type Order = "asc" | "desc";
 
 type SortKey = keyof Pick<
   Service,
-  "service_code" | "service_name" | "service_price" | "service_status"
+  | "service_code"
+  | "service_name"
+  | "service_price"
+  | "service_status"
+  | "service_currency"
 >;
 
 const tableFontFamily =
@@ -92,6 +100,7 @@ const ServicesForm: React.FC = () => {
     service_name: "",
     service_price: "",
     service_status: "active",
+    service_currency: "USD", // default
   };
 
   const [newService, setNewService] = useState<NewService>(emptyServiceForm);
@@ -112,6 +121,7 @@ const ServicesForm: React.FC = () => {
             ? row.service_price
             : Number(row.service_price ?? 0),
         service_status: (row.service_status || "active") as ServiceStatus,
+        service_currency: (row.service_currency || "USD") as Currency, // 👈 map from API
       }));
 
       setServices(mapped);
@@ -188,6 +198,7 @@ const ServicesForm: React.FC = () => {
       service_name: "",
       service_price: "",
       service_status: "active",
+      service_currency: "USD", // reset to default
     });
 
     setOpenServiceModal(true);
@@ -229,11 +240,13 @@ const ServicesForm: React.FC = () => {
 
     try {
       await saveService({
-        idservice: modalMode === "edit" && editingId != null ? editingId : undefined,
+        idservice:
+          modalMode === "edit" && editingId != null ? editingId : undefined,
         service_code: newService.service_code,
         service_name: newService.service_name,
         service_price: newService.service_price,
         service_status: newService.service_status,
+        service_currency: newService.service_currency, // 👈 sent to backend
       });
 
       handleCloseServiceModal();
@@ -258,6 +271,7 @@ const ServicesForm: React.FC = () => {
       service_price:
         s.service_price != null ? s.service_price.toString() : "",
       service_status: s.service_status || "active",
+      service_currency: s.service_currency || "USD",
     });
 
     setOpenServiceModal(true);
@@ -483,19 +497,19 @@ const ServicesForm: React.FC = () => {
           }}
         >
           <Table
-  stickyHeader
-  size="small"
-  sx={{
-    "& td, & th": {
-      fontFamily: tableFontFamily,
-      textAlign: "center",        // 🔥 centers body + header
-    },
-    "& th .MuiTableSortLabel-root": {
-      marginLeft: "auto",
-      marginRight: "auto",
-    },
-  }}
->
+            stickyHeader
+            size="small"
+            sx={{
+              "& td, & th": {
+                fontFamily: tableFontFamily,
+                textAlign: "center",
+              },
+              "& th .MuiTableSortLabel-root": {
+                marginLeft: "auto",
+                marginRight: "auto",
+              },
+            }}
+          >
             <TableHead>
               <TableRow
                 sx={{
@@ -507,13 +521,14 @@ const ServicesForm: React.FC = () => {
                 {renderSortableHeaderCell("Service Code", "service_code")}
                 {renderSortableHeaderCell("Service Name", "service_name")}
                 {renderSortableHeaderCell("Price", "service_price")}
+                {renderSortableHeaderCell("Currency", "service_currency")}
                 {renderSortableHeaderCell("Status", "service_status")}
               </TableRow>
             </TableHead>
             <TableBody>
               {filteredAndSortedServices.length === 0 ? (
                 <TableRow tabIndex={-1}>
-                  <TableCell colSpan={4} align="center">
+                  <TableCell colSpan={5} align="center">
                     <Typography
                       variant="body2"
                       color="text.secondary"
@@ -566,6 +581,14 @@ const ServicesForm: React.FC = () => {
                       }}
                     >
                       {s.service_price.toFixed(2)}
+                    </TableCell>
+                    <TableCell
+                      sx={{
+                        fontSize: "0.9rem",
+                        fontWeight: 500,
+                      }}
+                    >
+                      {s.service_currency}
                     </TableCell>
                     <TableCell
                       sx={{
@@ -651,26 +674,55 @@ const ServicesForm: React.FC = () => {
                 sx: { fontFamily: tableFontFamily },
               }}
             />
-            <TextField
-              label="Price"
-              fullWidth
-              size="small"
-              type="number"
-              value={newService.service_price}
-              onChange={(e) =>
-                handleFieldChange("service_price", e.target.value)
-              }
-              error={!!formErrors.service_price}
-              helperText={formErrors.service_price || " "}
-              InputProps={{
-                sx: {
-                  fontFamily: tableFontFamily,
-                },
-              }}
-              InputLabelProps={{
-                sx: { fontFamily: tableFontFamily },
-              }}
-            />
+
+            {/* Price + Currency row */}
+            <Stack direction="row" spacing={1}>
+              <TextField
+                label="Price"
+                fullWidth
+                size="small"
+                type="number"
+                value={newService.service_price}
+                onChange={(e) =>
+                  handleFieldChange("service_price", e.target.value)
+                }
+                error={!!formErrors.service_price}
+                helperText={formErrors.service_price || " "}
+                InputProps={{
+                  sx: {
+                    fontFamily: tableFontFamily,
+                  },
+                }}
+                InputLabelProps={{
+                  sx: { fontFamily: tableFontFamily },
+                }}
+              />
+              <TextField
+                label="Currency"
+                size="small"
+                select
+                sx={{ minWidth: 90 }}
+                value={newService.service_currency}
+                onChange={(e) =>
+                  handleFieldChange(
+                    "service_currency",
+                    e.target.value as Currency
+                  )
+                }
+                InputProps={{
+                  sx: {
+                    fontFamily: tableFontFamily,
+                  },
+                }}
+                InputLabelProps={{
+                  sx: { fontFamily: tableFontFamily },
+                }}
+              >
+                <MenuItem value="USD">USD</MenuItem>
+                <MenuItem value="LBP">LBP</MenuItem>
+              </TextField>
+            </Stack>
+
             <TextField
               label="Status"
               fullWidth

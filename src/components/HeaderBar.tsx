@@ -80,6 +80,8 @@ const HeaderBar: React.FC = () => {
   { key: "logout", label: "Logout", icon: <LogoutIcon /> },
 ];
 
+const fullName = localStorage.getItem("fullname") || "Guest";
+
   const handleClick = (key: NavKey) => {
     setSelected(key);
 
@@ -159,7 +161,7 @@ const HeaderBar: React.FC = () => {
             variant="subtitle1"
             sx={{ fontWeight: 700, color: "#f9fafb", letterSpacing: 0.5 }}
           >
-            ISP Software
+            {fullName}
           </Typography>
           <Typography
             variant="caption"

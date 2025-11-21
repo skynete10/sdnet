@@ -19,6 +19,7 @@ import {
   DialogContent,
   DialogActions,
   MenuItem,
+  InputAdornment,
 } from "@mui/material";
 import axios from "axios";
 
@@ -29,19 +30,23 @@ type Order = "asc" | "desc";
 const tableFontFamily =
   '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif';
 
+type Currency = "USD" | "LBP";
+
 type CustomerSubscription = {
   id: number;
-  customer_username: string; // customer code
+  customer_username: string;
   customer_fullname: string;
   service_code: string;
   service_name: string;
-  amount: number; // backend field
+  amount: number;
+  billing_month?: string | null;
 };
 
 type NewSubscription = {
   customer_username: string;
   service_code: string;
-  amount: string; // as string for TextField
+  amount: string;
+  billing_month: string; // 👈 month/year in "YYYY-MM"
 };
 
 type FormErrors = Partial<Record<keyof NewSubscription, string>>;
@@ -50,7 +55,8 @@ type SaveSubscriptionPayload = {
   id?: number;
   customer_username: string;
   service_code: string;
-  amount: string | number; // backend expects "amount"
+  amount: string | number;
+  billing_month?: string;
 };
 
 type SortKey = keyof Pick<
@@ -71,9 +77,9 @@ type ServiceOption = {
   service_code: string;
   service_name: string;
   service_price: number;
+  service_currency: Currency;
 };
 
-// ---- API helper: save subscription (add or edit) ----
 const saveSubscription = async (data: SaveSubscriptionPayload) => {
   const res = await axios.post(
     `${API_BASE_URL}/api/customer-subscriptions/savesubscription`,
@@ -82,21 +88,28 @@ const saveSubscription = async (data: SaveSubscriptionPayload) => {
   return res.data;
 };
 
+// helper for "YYYY-MM"
+const getCurrentMonthValue = (): string => {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${d.getFullYear()}-${m}`;
+};
+
 const CustomerSubscriptionForm: React.FC = () => {
   const [subscriptions, setSubscriptions] = useState<CustomerSubscription[]>([]);
 
-  // filters
   const [customerFilter, setCustomerFilter] = useState("");
   const [serviceFilter, setServiceFilter] = useState("");
 
-  // sorting
+  const [monthFilter, setMonthFilter] = useState<string>(() =>
+    getCurrentMonthValue()
+  );
+
   const [order, setOrder] = useState<Order>("asc");
   const [orderBy, setOrderBy] = useState<SortKey>("customer_fullname");
 
-  // error
   const [error, setError] = useState<string | null>(null);
 
-  // modal
   const [openSubModal, setOpenSubModal] = useState(false);
   const [modalMode, setModalMode] = useState<"add" | "edit">("add");
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -105,16 +118,17 @@ const CustomerSubscriptionForm: React.FC = () => {
     customer_username: "",
     service_code: "",
     amount: "",
+    billing_month: getCurrentMonthValue(),
   };
 
   const [newSub, setNewSub] = useState<NewSubscription>(emptySubForm);
   const [formErrors, setFormErrors] = useState<FormErrors>({});
 
-  // dropdown options
   const [customerOptions, setCustomerOptions] = useState<CustomerOption[]>([]);
   const [serviceOptions, setServiceOptions] = useState<ServiceOption[]>([]);
 
-  // ---- Load subscriptions from API ----
+  const [priceCurrency, setPriceCurrency] = useState<Currency>("USD");
+
   const loadSubscriptions = async () => {
     try {
       const res = await axios.get(`${API_BASE_URL}/api/customer-subscriptions`);
@@ -128,6 +142,7 @@ const CustomerSubscriptionForm: React.FC = () => {
         service_name: row.service_name ?? "",
         amount:
           typeof row.amount === "number" ? row.amount : Number(row.amount ?? 0),
+        billing_month: row.billing_month ?? null,
       }));
 
       setSubscriptions(mapped);
@@ -136,7 +151,6 @@ const CustomerSubscriptionForm: React.FC = () => {
     }
   };
 
-  // ---- Load customers for dropdown ----
   const loadCustomers = async () => {
     try {
       const res = await axios.get(`${API_BASE_URL}/api/customers`);
@@ -153,7 +167,6 @@ const CustomerSubscriptionForm: React.FC = () => {
     }
   };
 
-  // ---- Load services for dropdown ----
   const loadServices = async () => {
     try {
       const res = await axios.get(`${API_BASE_URL}/api/services`);
@@ -166,6 +179,7 @@ const CustomerSubscriptionForm: React.FC = () => {
           typeof row.service_price === "number"
             ? row.service_price
             : Number(row.service_price ?? 0),
+        service_currency: (row.service_currency || "USD") as Currency,
       }));
 
       setServiceOptions(mapped);
@@ -174,7 +188,6 @@ const CustomerSubscriptionForm: React.FC = () => {
     }
   };
 
-  // initial load
   useEffect(() => {
     loadSubscriptions();
     loadCustomers();
@@ -200,7 +213,12 @@ const CustomerSubscriptionForm: React.FC = () => {
         !serviceFilter ||
         serviceCombined.toLowerCase().includes(serviceFilter.toLowerCase());
 
-      return customerMatch && serviceMatch;
+      const monthMatch =
+        !monthFilter ||
+        (!!s.billing_month &&
+          s.billing_month.toString().startsWith(monthFilter));
+
+      return customerMatch && serviceMatch && monthMatch;
     });
 
     return [...filtered].sort((a, b) => {
@@ -222,15 +240,18 @@ const CustomerSubscriptionForm: React.FC = () => {
       if (aStr > bStr) return order === "asc" ? 1 : -1;
       return 0;
     });
-  }, [subscriptions, customerFilter, serviceFilter, order, orderBy]);
+  }, [subscriptions, customerFilter, serviceFilter, monthFilter, order, orderBy]);
 
-  // ---- Open "Add New Subscription" modal ----
   const handleOpenNew = () => {
     setModalMode("add");
     setEditingId(null);
     setFormErrors({});
     setError(null);
-    setNewSub(emptySubForm);
+    setNewSub({
+      ...emptySubForm,
+      billing_month: getCurrentMonthValue(),
+    });
+    setPriceCurrency("USD");
     setOpenSubModal(true);
   };
 
@@ -241,7 +262,6 @@ const CustomerSubscriptionForm: React.FC = () => {
     setEditingId(null);
   };
 
-  // ---- Validation ----
   const validateForm = (): boolean => {
     const errors: FormErrors = {};
 
@@ -258,6 +278,7 @@ const CustomerSubscriptionForm: React.FC = () => {
     } else if (Number(newSub.amount) < 0) {
       errors.amount = "Price cannot be negative";
     }
+    // billing_month is optional; no error
 
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
@@ -273,7 +294,8 @@ const CustomerSubscriptionForm: React.FC = () => {
         id: modalMode === "edit" && editingId != null ? editingId : undefined,
         customer_username: newSub.customer_username,
         service_code: newSub.service_code,
-        amount: newSub.amount, // backend expects "amount"
+        amount: newSub.amount,
+        billing_month: newSub.billing_month || undefined,
       });
 
       handleCloseSubModal();
@@ -285,7 +307,6 @@ const CustomerSubscriptionForm: React.FC = () => {
     }
   };
 
-  // ---- Double-click row to edit ----
   const handleRowDoubleClick = (s: CustomerSubscription) => {
     setModalMode("edit");
     setEditingId(s.id);
@@ -296,7 +317,15 @@ const CustomerSubscriptionForm: React.FC = () => {
       customer_username: s.customer_username,
       service_code: s.service_code,
       amount: s.amount != null ? s.amount.toString() : "",
+      billing_month: s.billing_month
+        ? s.billing_month.toString().slice(0, 7)
+        : getCurrentMonthValue(),
     });
+
+    const found = serviceOptions.find(
+      (opt) => opt.service_code === s.service_code
+    );
+    setPriceCurrency(found?.service_currency || "USD");
 
     setOpenSubModal(true);
   };
@@ -333,18 +362,19 @@ const CustomerSubscriptionForm: React.FC = () => {
     setFormErrors((prev) => ({ ...prev, [key]: undefined }));
   };
 
-  // Auto-fill amount from selected service
   const handleServiceChange = (serviceCode: string) => {
     handleFieldChange("service_code", serviceCode);
     const found = serviceOptions.find((s) => s.service_code === serviceCode);
     if (found) {
       handleFieldChange("amount", found.service_price.toString());
+      setPriceCurrency(found.service_currency);
+    } else {
+      setPriceCurrency("USD");
     }
   };
 
   return (
     <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
-      {/* Header bar */}
       <Paper
         sx={{
           p: 2,
@@ -408,7 +438,6 @@ const CustomerSubscriptionForm: React.FC = () => {
         </Typography>
       )}
 
-      {/* Filter panel */}
       <Paper
         sx={{
           p: 2.5,
@@ -433,7 +462,7 @@ const CustomerSubscriptionForm: React.FC = () => {
             Filters
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            Type to narrow down customer subscriptions.
+            Narrow down customer subscriptions.
           </Typography>
         </Stack>
 
@@ -444,6 +473,29 @@ const CustomerSubscriptionForm: React.FC = () => {
           spacing={2}
           alignItems={{ xs: "stretch", md: "flex-end" }}
         >
+          <TextField
+            label="Month"
+            variant="outlined"
+            size="small"
+            type="month"
+            value={monthFilter}
+            onChange={(e) => setMonthFilter(e.target.value)}
+            InputProps={{
+              sx: {
+                fontFamily: tableFontFamily,
+                fontSize: "0.9rem",
+              },
+            }}
+            InputLabelProps={{
+              shrink: true,
+              sx: {
+                fontFamily: tableFontFamily,
+                fontSize: "0.85rem",
+              },
+            }}
+            sx={{ minWidth: 180 }}
+          />
+
           <TextField
             label="Customer (Code / Name)"
             variant="outlined"
@@ -487,7 +539,6 @@ const CustomerSubscriptionForm: React.FC = () => {
         </Stack>
       </Paper>
 
-      {/* Table */}
       <Paper
         sx={{
           borderRadius: 2,
@@ -618,7 +669,6 @@ const CustomerSubscriptionForm: React.FC = () => {
         </TableContainer>
       </Paper>
 
-      {/* Add / Edit Subscription Modal */}
       <Dialog
         open={openSubModal}
         onClose={handleCloseSubModal}
@@ -701,6 +751,28 @@ const CustomerSubscriptionForm: React.FC = () => {
               ))}
             </TextField>
 
+            {/* Month/Year datepicker in dialog */}
+            <TextField
+              label="Month"
+              fullWidth
+              size="small"
+              type="month"
+              value={newSub.billing_month}
+              onChange={(e) =>
+                handleFieldChange("billing_month", e.target.value)
+              }
+              InputProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                  fontSize: "0.9rem",
+                },
+              }}
+              InputLabelProps={{
+                shrink: true,
+                sx: { fontFamily: tableFontFamily },
+              }}
+            />
+
             <TextField
               label="Price"
               fullWidth
@@ -710,10 +782,16 @@ const CustomerSubscriptionForm: React.FC = () => {
               onChange={(e) => handleFieldChange("amount", e.target.value)}
               error={!!formErrors.amount}
               helperText={formErrors.amount || " "}
+              disabled
               InputProps={{
                 sx: {
                   fontFamily: tableFontFamily,
                 },
+                endAdornment: (
+                  <InputAdornment position="end">
+                    {priceCurrency}
+                  </InputAdornment>
+                ),
               }}
               InputLabelProps={{
                 sx: { fontFamily: tableFontFamily },

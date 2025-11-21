@@ -13,8 +13,9 @@ import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import logo from "../assets/sdnet_logo.jpg";
 import bg from "../assets/login_bg.jpg";
+import { getEnv } from "../utils/env_functions";
 
-const API_BASE_URL ="http://127.0.0.1:5100";
+const API_BASE_URL =getEnv("REACT_APP_API_BASE_URL", "http://127.0.0.1:5100");
 
 const LoginForm: React.FC = () => {
   const [username, setUsername] = useState("");
@@ -39,7 +40,7 @@ const LoginForm: React.FC = () => {
 
       if (response.data?.status === "success") {
         // Optionally store user info in localStorage
-        // localStorage.setItem("user", JSON.stringify(response.data));
+         localStorage.setItem("fullname", JSON.stringify(response.data.fullname));
 
         navigate("/home");
       } else {

@@ -18,6 +18,7 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  MenuItem,
 } from "@mui/material";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import DownloadIcon from "@mui/icons-material/Download";
@@ -70,6 +71,12 @@ type SortKey = keyof Pick<
 const tableFontFamily =
   '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif';
 
+
+const getFirstCityWord = (city: string | null | undefined): string => {
+  if (!city) return "";
+  return city.split("-")[0].trim();
+};
+
 // ---- API helper: save customer (add or edit) ----
 const saveCustomer = async (data: SaveCustomerPayload) => {
   const res = await axios.post(
@@ -83,7 +90,7 @@ const CustomersForm: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [nameFilter, setNameFilter] = useState("");
   const [mobileFilter, setMobileFilter] = useState("");
-  const [addressFilter, setAddressFilter] = useState("");
+  const [addressFilter, setAddressFilter] = useState(""); // selected first-word city or ""
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -160,6 +167,18 @@ const CustomersForm: React.FC = () => {
     setOrderBy(property);
   };
 
+  // ---- Build dropdown options from first word of each city ----
+  const cityOptions = useMemo(() => {
+    const set = new Set<string>();
+    customers.forEach((c) => {
+      const firstWord = getFirstCityWord(c.city);
+      if (firstWord) {
+        set.add(firstWord);
+      }
+    });
+    return Array.from(set).sort();
+  }, [customers]);
+
   const filteredAndSortedCustomers = useMemo(() => {
     const filtered = customers.filter((c) => {
       const nameMatch =
@@ -171,10 +190,11 @@ const CustomersForm: React.FC = () => {
         !mobileFilter ||
         c.mobile.toLowerCase().includes(mobileFilter.toLowerCase());
 
-      const addressCombined = `${c.city} ${c.village} ${c.street} ${c.building}`;
+      const firstCityWord = getFirstCityWord(c.city).toLowerCase();
+
       const addressMatch =
         !addressFilter ||
-        addressCombined.toLowerCase().includes(addressFilter.toLowerCase());
+        firstCityWord === addressFilter.toLowerCase();
 
       return nameMatch && mobileMatch && addressMatch;
     });
@@ -477,7 +497,7 @@ const CustomersForm: React.FC = () => {
             Filters
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            Type to narrow down results. Export respects your filters.
+            Type / select to narrow down results. Export respects your filters.
           </Typography>
         </Stack>
 
@@ -528,8 +548,10 @@ const CustomersForm: React.FC = () => {
               },
             }}
           />
+          {/* Address filter dropdown from first part of city before "-" */}
           <TextField
-            label="Address (City / Village / Street / Building)"
+            select
+            label="City"
             variant="outlined"
             size="small"
             fullWidth
@@ -547,7 +569,16 @@ const CustomersForm: React.FC = () => {
                 fontSize: "0.85rem",
               },
             }}
-          />
+          >
+            <MenuItem value="">
+              <em>All cities</em>
+            </MenuItem>
+            {cityOptions.map((city) => (
+              <MenuItem key={city} value={city}>
+                {city}
+              </MenuItem>
+            ))}
+          </TextField>
         </Stack>
       </Paper>
 
