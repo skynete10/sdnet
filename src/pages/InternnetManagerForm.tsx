@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Box,
   Paper,
@@ -25,6 +25,9 @@ import {
   TableContainer,
   TableSortLabel,
 } from "@mui/material";
+import axios from "axios";
+
+const API_BASE_URL = "http://127.0.0.1:5100";
 
 const tableFontFamily =
   '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif';
@@ -48,46 +51,6 @@ type InternetRecord = {
   status: "active" | "stopped";
 };
 
-// demo data – replace with API data later
-const DEMO_ROWS: InternetRecord[] = [
-  {
-    id: 1,
-    username: "jdoe",
-    fullname: "John Doe",
-    city: "Beirut",
-    village: "Hamra",
-    due_date: "2025-11-30",
-    amount: 25.0,
-    invoiced: true,
-    payment: "paid",
-    status: "active",
-  },
-  {
-    id: 2,
-    username: "asmaa",
-    fullname: "Asmaa Khalil",
-    city: "Tripoli",
-    village: "Mina",
-    due_date: "2025-12-05",
-    amount: 18.5,
-    invoiced: true,
-    payment: "partial",
-    status: "active",
-  },
-  {
-    id: 3,
-    username: "karim",
-    fullname: "Karim Fawaz",
-    city: "Saida",
-    village: "Old Saida",
-    due_date: "2025-11-20",
-    amount: 30,
-    invoiced: false,
-    payment: "unpaid",
-    status: "stopped",
-  },
-];
-
 type Order = "asc" | "desc";
 type SortKey =
   | "username"
@@ -110,7 +73,45 @@ const InternnetManagerForm: React.FC = () => {
   const [order, setOrder] = useState<Order>("asc");
   const [orderBy, setOrderBy] = useState<SortKey>("username");
 
-  const rows = DEMO_ROWS;
+  const [rows, setRows] = useState<InternetRecord[]>([]);
+  const [apiError, setApiError] = useState<string | null>(null);
+
+  const loadInternetCustomers = async () => {
+    setApiError(null);
+    try {
+      const res = await axios.get(
+        `${API_BASE_URL}/api/internet-manager/customers`
+      );
+
+      const apiData = res.data as any[];
+
+      // Normalize so UI doesn't break if backend sends nulls/missing fields
+      const mapped: InternetRecord[] = apiData.map((r) => ({
+        id: Number(r.id),
+        username: r.username ?? "",
+        fullname: r.fullname ?? "",
+        city: r.city ?? "",
+        village: r.village ?? "",
+        due_date: (r.due_date ?? "1970-01-01").toString().slice(0, 10),
+        amount: typeof r.amount === "number" ? r.amount : Number(r.amount ?? 0),
+        invoiced: Boolean(r.invoiced ?? false),
+        payment:
+          r.payment === "paid" || r.payment === "partial"
+            ? r.payment
+            : "unpaid",
+        status: r.status === "stopped" ? "stopped" : "active",
+      }));
+
+      setRows(mapped);
+    } catch (e: any) {
+      console.error(e);
+      setApiError(e?.response?.data?.error || "Failed to load customers");
+    }
+  };
+
+  useEffect(() => {
+    loadInternetCustomers();
+  }, []);
 
   const handleRequestSort = (property: SortKey) => {
     const isAsc = orderBy === property && order === "asc";
@@ -149,8 +150,7 @@ const InternnetManagerForm: React.FC = () => {
         row.payment === paymentStatus;
 
       // Date picker (exact due date)
-      const dateMatch =
-        !filterDate || row.due_date === filterDate; // same YYYY-MM-DD
+      const dateMatch = !filterDate || row.due_date === filterDate;
 
       // Due date bucket (Today, This Week, This Month, Overdue)
       const due = new Date(row.due_date);
@@ -284,11 +284,13 @@ const InternnetManagerForm: React.FC = () => {
             Configure and monitor internet-related settings and records.
           </Typography>
         </Box>
-
-        <Stack direction="row" spacing={1.5} alignItems="center">
-          {/* Placeholder for future buttons (Import / Export / Actions, etc.) */}
-        </Stack>
       </Paper>
+
+      {apiError && (
+        <Typography color="error" variant="body2" sx={{ textAlign: "right" }}>
+          {apiError}
+        </Typography>
+      )}
 
       {/* Filter panel */}
       <Paper
@@ -524,7 +526,7 @@ const InternnetManagerForm: React.FC = () => {
         </Stack>
       </Paper>
 
-      {/* Main content area with datagrid-style table */}
+      {/* Main content area */}
       <Paper
         sx={{
           borderRadius: 2,
@@ -620,20 +622,10 @@ const InternnetManagerForm: React.FC = () => {
                       cursor: "default",
                     }}
                   >
-                    <TableCell
-                      sx={{
-                        fontSize: "0.9rem",
-                        fontWeight: 500,
-                      }}
-                    >
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
                       {row.username}
                     </TableCell>
-                    <TableCell
-                      sx={{
-                        fontSize: "0.9rem",
-                        fontWeight: 600,
-                      }}
-                    >
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 600 }}>
                       {row.fullname}
                     </TableCell>
                     <TableCell sx={{ fontSize: "0.9rem" }}>

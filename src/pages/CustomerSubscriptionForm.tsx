@@ -39,14 +39,15 @@ type CustomerSubscription = {
   service_code: string;
   service_name: string;
   amount: number;
-  billing_month?: string | null;
+  billing_date?: string | null; // backend field (YYYY-MM-DD)
+  service_currency?: Currency | null; // for grid display
 };
 
 type NewSubscription = {
   customer_username: string;
   service_code: string;
   amount: string;
-  billing_month: string; // 👈 month/year in "YYYY-MM"
+  billing_date: string; // full date in "YYYY-MM-DD"
 };
 
 type FormErrors = Partial<Record<keyof NewSubscription, string>>;
@@ -56,7 +57,7 @@ type SaveSubscriptionPayload = {
   customer_username: string;
   service_code: string;
   amount: string | number;
-  billing_month?: string;
+  billing_date?: string;
 };
 
 type SortKey = keyof Pick<
@@ -66,6 +67,7 @@ type SortKey = keyof Pick<
   | "service_code"
   | "service_name"
   | "amount"
+  | "billing_date"
 >;
 
 type CustomerOption = {
@@ -88,16 +90,37 @@ const saveSubscription = async (data: SaveSubscriptionPayload) => {
   return res.data;
 };
 
-// helper for "YYYY-MM"
+// helper for "YYYY-MM" (used for filter)
 const getCurrentMonthValue = (): string => {
   const d = new Date();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   return `${d.getFullYear()}-${m}`;
 };
 
+// helper for "YYYY-MM-DD" (used for dialog)
+const getCurrentDateValue = (): string => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+// pretty display for grid
+const formatBillingDate = (val?: string | null) => {
+  if (!val) return "";
+  // expects YYYY-MM-DD
+  try {
+    const d = new Date(val);
+    if (Number.isNaN(d.getTime())) return val.toString().slice(0, 10);
+    return d.toLocaleDateString();
+  } catch {
+    return val.toString().slice(0, 10);
+  }
+};
+
 const CustomerSubscriptionForm: React.FC = () => {
   const [subscriptions, setSubscriptions] = useState<CustomerSubscription[]>([]);
-
   const [customerFilter, setCustomerFilter] = useState("");
   const [serviceFilter, setServiceFilter] = useState("");
 
@@ -118,7 +141,7 @@ const CustomerSubscriptionForm: React.FC = () => {
     customer_username: "",
     service_code: "",
     amount: "",
-    billing_month: getCurrentMonthValue(),
+    billing_date: getCurrentDateValue(),
   };
 
   const [newSub, setNewSub] = useState<NewSubscription>(emptySubForm);
@@ -126,7 +149,6 @@ const CustomerSubscriptionForm: React.FC = () => {
 
   const [customerOptions, setCustomerOptions] = useState<CustomerOption[]>([]);
   const [serviceOptions, setServiceOptions] = useState<ServiceOption[]>([]);
-
   const [priceCurrency, setPriceCurrency] = useState<Currency>("USD");
 
   const loadSubscriptions = async () => {
@@ -142,7 +164,10 @@ const CustomerSubscriptionForm: React.FC = () => {
         service_name: row.service_name ?? "",
         amount:
           typeof row.amount === "number" ? row.amount : Number(row.amount ?? 0),
-        billing_month: row.billing_month ?? null,
+        billing_date: row.billing_date ?? null,
+        service_currency: (row.service_currency ||
+          row.currency ||
+          null) as Currency | null,
       }));
 
       setSubscriptions(mapped);
@@ -215,8 +240,8 @@ const CustomerSubscriptionForm: React.FC = () => {
 
       const monthMatch =
         !monthFilter ||
-        (!!s.billing_month &&
-          s.billing_month.toString().startsWith(monthFilter));
+        (!!s.billing_date &&
+          s.billing_date.toString().startsWith(monthFilter)); // YYYY-MM match
 
       return customerMatch && serviceMatch && monthMatch;
     });
@@ -233,6 +258,14 @@ const CustomerSubscriptionForm: React.FC = () => {
         return 0;
       }
 
+      if (orderBy === "billing_date") {
+        const aTime = aVal ? new Date(String(aVal)).getTime() : 0;
+        const bTime = bVal ? new Date(String(bVal)).getTime() : 0;
+        if (aTime < bTime) return order === "asc" ? -1 : 1;
+        if (aTime > bTime) return order === "asc" ? 1 : -1;
+        return 0;
+      }
+
       const aStr = (aVal ?? "").toString().toLowerCase();
       const bStr = (bVal ?? "").toString().toLowerCase();
 
@@ -240,7 +273,14 @@ const CustomerSubscriptionForm: React.FC = () => {
       if (aStr > bStr) return order === "asc" ? 1 : -1;
       return 0;
     });
-  }, [subscriptions, customerFilter, serviceFilter, monthFilter, order, orderBy]);
+  }, [
+    subscriptions,
+    customerFilter,
+    serviceFilter,
+    monthFilter,
+    order,
+    orderBy,
+  ]);
 
   const handleOpenNew = () => {
     setModalMode("add");
@@ -249,7 +289,7 @@ const CustomerSubscriptionForm: React.FC = () => {
     setError(null);
     setNewSub({
       ...emptySubForm,
-      billing_month: getCurrentMonthValue(),
+      billing_date: getCurrentDateValue(),
     });
     setPriceCurrency("USD");
     setOpenSubModal(true);
@@ -278,7 +318,6 @@ const CustomerSubscriptionForm: React.FC = () => {
     } else if (Number(newSub.amount) < 0) {
       errors.amount = "Price cannot be negative";
     }
-    // billing_month is optional; no error
 
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
@@ -286,7 +325,6 @@ const CustomerSubscriptionForm: React.FC = () => {
 
   const handleSaveSubscription = async () => {
     setError(null);
-
     if (!validateForm()) return;
 
     try {
@@ -295,7 +333,7 @@ const CustomerSubscriptionForm: React.FC = () => {
         customer_username: newSub.customer_username,
         service_code: newSub.service_code,
         amount: newSub.amount,
-        billing_month: newSub.billing_month || undefined,
+        billing_date: newSub.billing_date || undefined,
       });
 
       handleCloseSubModal();
@@ -317,15 +355,15 @@ const CustomerSubscriptionForm: React.FC = () => {
       customer_username: s.customer_username,
       service_code: s.service_code,
       amount: s.amount != null ? s.amount.toString() : "",
-      billing_month: s.billing_month
-        ? s.billing_month.toString().slice(0, 7)
-        : getCurrentMonthValue(),
+      billing_date: s.billing_date
+        ? s.billing_date.toString().slice(0, 10)
+        : getCurrentDateValue(),
     });
 
     const found = serviceOptions.find(
       (opt) => opt.service_code === s.service_code
     );
-    setPriceCurrency(found?.service_currency || "USD");
+    setPriceCurrency(found?.service_currency || s.service_currency || "USD");
 
     setOpenSubModal(true);
   };
@@ -339,6 +377,7 @@ const CustomerSubscriptionForm: React.FC = () => {
         color: "#fff",
         whiteSpace: "nowrap",
         userSelect: "none",
+        textAlign: "center",
       }}
       sortDirection={orderBy === property ? order : false}
     >
@@ -371,6 +410,14 @@ const CustomerSubscriptionForm: React.FC = () => {
     } else {
       setPriceCurrency("USD");
     }
+  };
+
+  const getRowCurrency = (s: CustomerSubscription): Currency => {
+    if (s.service_currency) return s.service_currency;
+    const found = serviceOptions.find(
+      (opt) => opt.service_code === s.service_code
+    );
+    return found?.service_currency || "USD";
   };
 
   return (
@@ -575,10 +622,7 @@ const CustomerSubscriptionForm: React.FC = () => {
                   },
                 }}
               >
-                {renderSortableHeaderCell(
-                  "Customer Code",
-                  "customer_username"
-                )}
+                {renderSortableHeaderCell("Customer Code", "customer_username")}
                 {renderSortableHeaderCell(
                   "Customer Name",
                   "customer_fullname"
@@ -586,12 +630,27 @@ const CustomerSubscriptionForm: React.FC = () => {
                 {renderSortableHeaderCell("Service Code", "service_code")}
                 {renderSortableHeaderCell("Service Name", "service_name")}
                 {renderSortableHeaderCell("Price", "amount")}
+                {renderSortableHeaderCell("Billing Date", "billing_date")}
+                <TableCell
+                  sx={{
+                    fontFamily: tableFontFamily,
+                    fontWeight: 700,
+                    fontSize: "0.95rem",
+                    color: "#fff",
+                    whiteSpace: "nowrap",
+                    userSelect: "none",
+                    textAlign: "center",
+                  }}
+                >
+                  Currency
+                </TableCell>
               </TableRow>
             </TableHead>
+
             <TableBody>
               {filteredAndSortedSubscriptions.length === 0 ? (
                 <TableRow tabIndex={-1}>
-                  <TableCell colSpan={5} align="center">
+                  <TableCell colSpan={7} align="center">
                     <Typography
                       variant="body2"
                       color="text.secondary"
@@ -620,36 +679,16 @@ const CustomerSubscriptionForm: React.FC = () => {
                       cursor: "default",
                     }}
                   >
-                    <TableCell
-                      sx={{
-                        fontSize: "0.9rem",
-                        fontWeight: 600,
-                      }}
-                    >
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 600 }}>
                       {s.customer_username}
                     </TableCell>
-                    <TableCell
-                      sx={{
-                        fontSize: "0.9rem",
-                        fontWeight: 500,
-                      }}
-                    >
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
                       {s.customer_fullname}
                     </TableCell>
-                    <TableCell
-                      sx={{
-                        fontSize: "0.9rem",
-                        fontWeight: 500,
-                      }}
-                    >
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
                       {s.service_code}
                     </TableCell>
-                    <TableCell
-                      sx={{
-                        fontSize: "0.9rem",
-                        fontWeight: 500,
-                      }}
-                    >
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
                       {s.service_name}
                     </TableCell>
                     <TableCell
@@ -660,6 +699,12 @@ const CustomerSubscriptionForm: React.FC = () => {
                       }}
                     >
                       {s.amount.toFixed(2)}
+                    </TableCell>
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
+                      {formatBillingDate(s.billing_date)}
+                    </TableCell>
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 600 }}>
+                      {getRowCurrency(s)}
                     </TableCell>
                   </TableRow>
                 ))
@@ -710,14 +755,8 @@ const CustomerSubscriptionForm: React.FC = () => {
               }
               error={!!formErrors.customer_username}
               helperText={formErrors.customer_username || " "}
-              InputProps={{
-                sx: {
-                  fontFamily: tableFontFamily,
-                },
-              }}
-              InputLabelProps={{
-                sx: { fontFamily: tableFontFamily },
-              }}
+              InputProps={{ sx: { fontFamily: tableFontFamily } }}
+              InputLabelProps={{ sx: { fontFamily: tableFontFamily } }}
             >
               {customerOptions.map((c) => (
                 <MenuItem key={c.username} value={c.username}>
@@ -735,14 +774,8 @@ const CustomerSubscriptionForm: React.FC = () => {
               onChange={(e) => handleServiceChange(e.target.value)}
               error={!!formErrors.service_code}
               helperText={formErrors.service_code || " "}
-              InputProps={{
-                sx: {
-                  fontFamily: tableFontFamily,
-                },
-              }}
-              InputLabelProps={{
-                sx: { fontFamily: tableFontFamily },
-              }}
+              InputProps={{ sx: { fontFamily: tableFontFamily } }}
+              InputLabelProps={{ sx: { fontFamily: tableFontFamily } }}
             >
               {serviceOptions.map((s) => (
                 <MenuItem key={s.service_code} value={s.service_code}>
@@ -751,15 +784,14 @@ const CustomerSubscriptionForm: React.FC = () => {
               ))}
             </TextField>
 
-            {/* Month/Year datepicker in dialog */}
             <TextField
-              label="Month"
+              label="Billing Date"
               fullWidth
               size="small"
-              type="month"
-              value={newSub.billing_month}
+              type="date"
+              value={newSub.billing_date}
               onChange={(e) =>
-                handleFieldChange("billing_month", e.target.value)
+                handleFieldChange("billing_date", e.target.value)
               }
               InputProps={{
                 sx: {
@@ -784,18 +816,14 @@ const CustomerSubscriptionForm: React.FC = () => {
               helperText={formErrors.amount || " "}
               disabled
               InputProps={{
-                sx: {
-                  fontFamily: tableFontFamily,
-                },
+                sx: { fontFamily: tableFontFamily },
                 endAdornment: (
                   <InputAdornment position="end">
                     {priceCurrency}
                   </InputAdornment>
                 ),
               }}
-              InputLabelProps={{
-                sx: { fontFamily: tableFontFamily },
-              }}
+              InputLabelProps={{ sx: { fontFamily: tableFontFamily } }}
             />
           </Stack>
         </DialogContent>
