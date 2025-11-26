@@ -19,13 +19,18 @@ import {
   DialogContent,
   DialogActions,
   MenuItem,
+  Menu,
 } from "@mui/material";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import DownloadIcon from "@mui/icons-material/Download";
+import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
+import HomeWorkOutlinedIcon from "@mui/icons-material/HomeWorkOutlined";
 import axios from "axios";
 import * as XLSX from "xlsx";
 
 const API_BASE_URL = "http://127.0.0.1:5100";
+
+type CustomerStatus = "active" | "inactive";
 
 type Customer = {
   id: number;
@@ -36,6 +41,7 @@ type Customer = {
   village: string;
   street: string;
   building: string;
+  status?: CustomerStatus; // "active" | "inactive"
 };
 
 type NewCustomer = {
@@ -51,7 +57,7 @@ type NewCustomer = {
 type FormErrors = Partial<Record<keyof NewCustomer, string>>;
 
 type SaveCustomerPayload = {
-  id?: number; // omit for add, set for edit
+  id?: number;
   fullname: string;
   mobile: string;
   username: string;
@@ -65,19 +71,25 @@ type Order = "asc" | "desc";
 
 type SortKey = keyof Pick<
   Customer,
-  "fullname" | "mobile" | "username" | "city" | "village" | "street" | "building"
+  | "fullname"
+  | "mobile"
+  | "username"
+  | "city"
+  | "village"
+  | "street"
+  | "building"
+  | "status"
 >;
 
 const tableFontFamily =
   '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif';
-
 
 const getFirstCityWord = (city: string | null | undefined): string => {
   if (!city) return "";
   return city.split("-")[0].trim();
 };
 
-// ---- API helper: save customer (add or edit) ----
+// ---- API helpers ----
 const saveCustomer = async (data: SaveCustomerPayload) => {
   const res = await axios.post(
     `${API_BASE_URL}/api/customers/savecustomer`,
@@ -86,11 +98,18 @@ const saveCustomer = async (data: SaveCustomerPayload) => {
   return res.data;
 };
 
+const updateCustomerStatus = async (id: number, status: CustomerStatus) => {
+  await axios.post(`${API_BASE_URL}/api/customers/update-status`, {
+    id,
+    status,
+  });
+};
+
 const CustomersForm: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [nameFilter, setNameFilter] = useState("");
   const [mobileFilter, setMobileFilter] = useState("");
-  const [addressFilter, setAddressFilter] = useState(""); // selected first-word city or ""
+  const [addressFilter, setAddressFilter] = useState("");
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -119,6 +138,55 @@ const CustomersForm: React.FC = () => {
   );
   const [formErrors, setFormErrors] = useState<FormErrors>({});
 
+  // Full Name autofocus ref
+  const fullNameRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (openNewCustomer) {
+      const t = setTimeout(() => fullNameRef.current?.focus(), 50);
+      return () => clearTimeout(t);
+    }
+  }, [openNewCustomer]);
+
+  // ---- Status menu state ----
+  const [statusMenuAnchorEl, setStatusMenuAnchorEl] =
+    useState<HTMLElement | null>(null);
+  const [statusMenuCustomer, setStatusMenuCustomer] = useState<Customer | null>(
+    null
+  );
+
+  const handleOpenStatusMenu = (
+    event: React.MouseEvent<HTMLElement>,
+    customer: Customer
+  ) => {
+    setStatusMenuAnchorEl(event.currentTarget);
+    setStatusMenuCustomer(customer);
+  };
+
+  const handleCloseStatusMenu = () => {
+    setStatusMenuAnchorEl(null);
+    setStatusMenuCustomer(null);
+  };
+
+  const handleChangeStatus = async (newStatus: CustomerStatus) => {
+    if (!statusMenuCustomer) return;
+
+    try {
+      await updateCustomerStatus(statusMenuCustomer.id, newStatus);
+
+      setCustomers((prev) =>
+        prev.map((c) =>
+          c.id === statusMenuCustomer.id ? { ...c, status: newStatus } : c
+        )
+      );
+    } catch (err) {
+      console.error("Failed to update status", err);
+      alert("Failed to update status");
+    } finally {
+      handleCloseStatusMenu();
+    }
+  };
+
   const handleOpenNew = () => {
     setModalMode("add");
     setEditingId(null);
@@ -134,13 +202,22 @@ const CustomersForm: React.FC = () => {
     setEditingId(null);
   };
 
-  // ---- Load customers from API ----
+  // ---- Load customers from API (updated) ----
   const loadCustomers = async () => {
-    try {
-      const res = await axios.get(`${API_BASE_URL}/api/customers`);
-      const apiData = res.data as any[];
+  try {
+    const res = await axios.get(`${API_BASE_URL}/api/customers`);
+    const apiData = res.data as any[];
 
-      const mapped: Customer[] = apiData.map((row) => ({
+    const mapped: Customer[] = apiData.map((row) => {
+      let status: CustomerStatus = "active";
+
+      if (row.status === 0 || row.status === "0") {
+        status = "inactive";
+      } else if (row.customer_status === 0 || row.customer_status === "0") {
+        status = "inactive";
+      }
+
+      return {
         id: row.id,
         fullname: row.fullname,
         mobile: row.mobile,
@@ -149,13 +226,15 @@ const CustomersForm: React.FC = () => {
         village: row.village ?? "",
         street: row.street ?? "",
         building: row.building ?? "",
-      }));
+        status,
+      };
+    });
 
-      setCustomers(mapped);
-    } catch (e) {
-      console.warn("Could not load customers from API.", e);
-    }
-  };
+    setCustomers(mapped);
+  } catch (e) {
+    console.warn("Could not load customers from API.", e);
+  }
+};
 
   useEffect(() => {
     loadCustomers();
@@ -255,6 +334,7 @@ const CustomersForm: React.FC = () => {
       Village: c.village,
       Street: c.street,
       Building: c.building,
+      Status: c.status ?? "active",
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(exportData);
@@ -285,9 +365,7 @@ const CustomersForm: React.FC = () => {
   };
 
   const handleSaveCustomer = async () => {
-    if (!validateForm()) {
-      return;
-    }
+    if (!validateForm()) return;
 
     try {
       await saveCustomer({
@@ -356,6 +434,38 @@ const CustomersForm: React.FC = () => {
   const handleFieldChange = (key: keyof NewCustomer, value: string) => {
     setNewCustomer((prev) => ({ ...prev, [key]: value }));
     setFormErrors((prev) => ({ ...prev, [key]: undefined }));
+  };
+
+  const renderStatusChip = (status?: CustomerStatus) => {
+    const effectiveStatus: CustomerStatus =
+      status === "inactive" ? "inactive" : "active";
+
+    const isActive = effectiveStatus === "active";
+
+    return (
+      <Stack direction="row" alignItems="center" spacing={1}>
+        <Box
+          sx={{
+            width: 10,
+            height: 10,
+            borderRadius: "50%",
+            bgcolor: isActive ? "#43a047" : "#e53935",
+            boxShadow: "0 0 0 2px rgba(0,0,0,0.08)",
+          }}
+        />
+        <Typography
+          variant="body2"
+          sx={{
+            fontFamily: tableFontFamily,
+            fontWeight: 600,
+            color: isActive ? "#2e7d32" : "#c62828",
+            fontSize: "0.8rem",
+          }}
+        >
+          {isActive ? "Active" : "Inactive"}
+        </Typography>
+      </Stack>
+    );
   };
 
   return (
@@ -548,7 +658,6 @@ const CustomersForm: React.FC = () => {
               },
             }}
           />
-          {/* Address filter dropdown from first part of city before "-" */}
           <TextField
             select
             label="City"
@@ -621,12 +730,13 @@ const CustomersForm: React.FC = () => {
                 {renderSortableHeaderCell("Village", "village")}
                 {renderSortableHeaderCell("Street", "street")}
                 {renderSortableHeaderCell("Building", "building")}
+                {renderSortableHeaderCell("Status", "status")}
               </TableRow>
             </TableHead>
             <TableBody>
               {filteredAndSortedCustomers.length === 0 ? (
                 <TableRow tabIndex={-1}>
-                  <TableCell colSpan={7} align="center">
+                  <TableCell colSpan={8} align="center">
                     <Typography
                       variant="body2"
                       color="text.secondary"
@@ -655,61 +765,36 @@ const CustomersForm: React.FC = () => {
                       cursor: "default",
                     }}
                   >
-                    <TableCell
-                      sx={{
-                        fontSize: "0.9rem",
-                        fontWeight: 600,
-                      }}
-                    >
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 600 }}>
                       {c.fullname}
                     </TableCell>
-                    <TableCell
-                      sx={{
-                        fontSize: "0.9rem",
-                        fontWeight: 500,
-                      }}
-                    >
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
                       {c.mobile}
                     </TableCell>
-                    <TableCell
-                      sx={{
-                        fontSize: "0.9rem",
-                        fontWeight: 500,
-                      }}
-                    >
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
                       {c.username}
                     </TableCell>
-                    <TableCell
-                      sx={{
-                        fontSize: "0.9rem",
-                        fontWeight: 500,
-                      }}
-                    >
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
                       {c.city}
                     </TableCell>
-                    <TableCell
-                      sx={{
-                        fontSize: "0.9rem",
-                        fontWeight: 500,
-                      }}
-                    >
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
                       {c.village}
                     </TableCell>
-                    <TableCell
-                      sx={{
-                        fontSize: "0.9rem",
-                        fontWeight: 500,
-                      }}
-                    >
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
                       {c.street}
+                    </TableCell>
+                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
+                      {c.building}
                     </TableCell>
                     <TableCell
                       sx={{
                         fontSize: "0.9rem",
                         fontWeight: 500,
+                        cursor: "pointer",
                       }}
+                      onClick={(e) => handleOpenStatusMenu(e, c)}
                     >
-                      {c.building}
+                      {renderStatusChip(c.status)}
                     </TableCell>
                   </TableRow>
                 ))
@@ -718,6 +803,22 @@ const CustomersForm: React.FC = () => {
           </Table>
         </TableContainer>
       </Paper>
+
+      {/* Status dropdown menu */}
+      <Menu
+        anchorEl={statusMenuAnchorEl}
+        open={Boolean(statusMenuAnchorEl)}
+        onClose={handleCloseStatusMenu}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+        transformOrigin={{ vertical: "top", horizontal: "center" }}
+      >
+        <MenuItem onClick={() => handleChangeStatus("active")}>
+          {renderStatusChip("active")}
+        </MenuItem>
+        <MenuItem onClick={() => handleChangeStatus("inactive")}>
+          {renderStatusChip("inactive")}
+        </MenuItem>
+      </Menu>
 
       {/* Add / Edit Customer Modal */}
       <Dialog
@@ -749,120 +850,196 @@ const CustomersForm: React.FC = () => {
         </DialogTitle>
 
         <DialogContent sx={{ mt: 2 }}>
-          <Stack spacing={2}>
-            <TextField
-              label="Full Name"
-              fullWidth
-              size="small"
-              value={newCustomer.fullname}
-              onChange={(e) => handleFieldChange("fullname", e.target.value)}
-              error={!!formErrors.fullname}
-              helperText={formErrors.fullname || " "}
-              InputProps={{
-                sx: {
-                  fontFamily: tableFontFamily,
-                },
+          <Stack spacing={2.2}>
+            {/* General Info Section */}
+            <Box
+              sx={{
+                p: 2,
+                borderRadius: 2,
+                bgcolor: "white",
+                border: "1px solid #e0e0e0",
+                boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
               }}
-              InputLabelProps={{
-                sx: { fontFamily: tableFontFamily },
+            >
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={1}
+                sx={{ mb: 1 }}
+              >
+                <PersonOutlineIcon sx={{ color: "#00695c" }} />
+                <Typography
+                  variant="subtitle1"
+                  sx={{
+                    fontFamily: tableFontFamily,
+                    fontWeight: 700,
+                    color: "#00695c",
+                  }}
+                >
+                  General Info
+                </Typography>
+              </Stack>
+
+              <Divider sx={{ mb: 2 }} />
+
+              <Stack spacing={2}>
+                {/* Full name */}
+                <TextField
+                  label="Full Name"
+                  fullWidth
+                  size="small"
+                  value={newCustomer.fullname}
+                  onChange={(e) =>
+                    handleFieldChange("fullname", e.target.value)
+                  }
+                  error={!!formErrors.fullname}
+                  helperText={formErrors.fullname || " "}
+                  autoFocus
+                  inputRef={fullNameRef}
+                  InputProps={{ sx: { fontFamily: tableFontFamily } }}
+                  InputLabelProps={{ sx: { fontFamily: tableFontFamily } }}
+                />
+
+                {/* Mobile + Username */}
+                <Box
+                  sx={{
+                    display: "flex",
+                    gap: 2,
+                    flexDirection: { xs: "column", md: "row" },
+                  }}
+                >
+                  <TextField
+                    label="Mobile"
+                    fullWidth
+                    size="small"
+                    value={newCustomer.mobile}
+                    onChange={(e) =>
+                      handleFieldChange("mobile", e.target.value)
+                    }
+                    error={!!formErrors.mobile}
+                    helperText={formErrors.mobile || " "}
+                    InputProps={{ sx: { fontFamily: tableFontFamily } }}
+                    InputLabelProps={{ sx: { fontFamily: tableFontFamily } }}
+                  />
+
+                  <TextField
+                    label="Username"
+                    fullWidth
+                    size="small"
+                    value={newCustomer.username}
+                    onChange={(e) =>
+                      handleFieldChange("username", e.target.value)
+                    }
+                    error={!!formErrors.username}
+                    helperText={formErrors.username || " "}
+                    InputProps={{ sx: { fontFamily: tableFontFamily } }}
+                    InputLabelProps={{ sx: { fontFamily: tableFontFamily } }}
+                  />
+                </Box>
+              </Stack>
+            </Box>
+
+            {/* Address Section */}
+            <Box
+              sx={{
+                p: 2,
+                borderRadius: 2,
+                bgcolor: "white",
+                border: "1px solid #e0e0e0",
+                boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
               }}
-            />
-            <TextField
-              label="Mobile"
-              fullWidth
-              size="small"
-              value={newCustomer.mobile}
-              onChange={(e) => handleFieldChange("mobile", e.target.value)}
-              error={!!formErrors.mobile}
-              helperText={formErrors.mobile || " "}
-              InputProps={{
-                sx: {
-                  fontFamily: tableFontFamily,
-                },
-              }}
-              InputLabelProps={{
-                sx: { fontFamily: tableFontFamily },
-              }}
-            />
-            <TextField
-              label="Username"
-              fullWidth
-              size="small"
-              value={newCustomer.username}
-              onChange={(e) => handleFieldChange("username", e.target.value)}
-              error={!!formErrors.username}
-              helperText={formErrors.username || " "}
-              InputProps={{
-                sx: {
-                  fontFamily: tableFontFamily,
-                },
-              }}
-              InputLabelProps={{
-                sx: { fontFamily: tableFontFamily },
-              }}
-            />
-            <TextField
-              label="City"
-              fullWidth
-              size="small"
-              value={newCustomer.city}
-              onChange={(e) => handleFieldChange("city", e.target.value)}
-              error={!!formErrors.city}
-              helperText={formErrors.city || " "}
-              InputProps={{
-                sx: {
-                  fontFamily: tableFontFamily,
-                },
-              }}
-              InputLabelProps={{
-                sx: { fontFamily: tableFontFamily },
-              }}
-            />
-            <TextField
-              label="Village"
-              fullWidth
-              size="small"
-              value={newCustomer.village}
-              onChange={(e) => handleFieldChange("village", e.target.value)}
-              InputProps={{
-                sx: {
-                  fontFamily: tableFontFamily,
-                },
-              }}
-              InputLabelProps={{
-                sx: { fontFamily: tableFontFamily },
-              }}
-            />
-            <TextField
-              label="Street"
-              fullWidth
-              size="small"
-              value={newCustomer.street}
-              onChange={(e) => handleFieldChange("street", e.target.value)}
-              InputProps={{
-                sx: {
-                  fontFamily: tableFontFamily,
-                },
-              }}
-              InputLabelProps={{
-                sx: { fontFamily: tableFontFamily },
-              }}
-            />
-            <TextField
-              label="Building"
-              fullWidth
-              size="small"
-              value={newCustomer.building}
-              onChange={(e) => handleFieldChange("building", e.target.value)}
-              InputProps={{
-                sx: {
-                  fontFamily: tableFontFamily,
-                },
-              }}
-              InputLabelProps={{
-                sx: { fontFamily: tableFontFamily },
-              }}
-            />
+            >
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={1}
+                sx={{ mb: 1 }}
+              >
+                <HomeWorkOutlinedIcon sx={{ color: "#00695c" }} />
+                <Typography
+                  variant="subtitle1"
+                  sx={{
+                    fontFamily: tableFontFamily,
+                    fontWeight: 700,
+                    color: "#00695c",
+                  }}
+                >
+                  Address
+                </Typography>
+              </Stack>
+
+              <Divider sx={{ mb: 2 }} />
+
+              <Stack spacing={2}>
+                {/* City + Village */}
+                <Box
+                  sx={{
+                    display: "flex",
+                    gap: 2,
+                    flexDirection: { xs: "column", md: "row" },
+                  }}
+                >
+                  <TextField
+                    label="City"
+                    fullWidth
+                    size="small"
+                    value={newCustomer.city}
+                    onChange={(e) =>
+                      handleFieldChange("city", e.target.value)
+                    }
+                    error={!!formErrors.city}
+                    helperText={formErrors.city || " "}
+                    InputProps={{ sx: { fontFamily: tableFontFamily } }}
+                    InputLabelProps={{ sx: { fontFamily: tableFontFamily } }}
+                  />
+
+                  <TextField
+                    label="Village"
+                    fullWidth
+                    size="small"
+                    value={newCustomer.village}
+                    onChange={(e) =>
+                      handleFieldChange("village", e.target.value)
+                    }
+                    InputProps={{ sx: { fontFamily: tableFontFamily } }}
+                    InputLabelProps={{ sx: { fontFamily: tableFontFamily } }}
+                  />
+                </Box>
+
+                {/* Street + Building */}
+                <Box
+                  sx={{
+                    display: "flex",
+                    gap: 2,
+                    flexDirection: { xs: "column", md: "row" },
+                  }}
+                >
+                  <TextField
+                    label="Street"
+                    fullWidth
+                    size="small"
+                    value={newCustomer.street}
+                    onChange={(e) =>
+                      handleFieldChange("street", e.target.value)
+                    }
+                    InputProps={{ sx: { fontFamily: tableFontFamily } }}
+                    InputLabelProps={{ sx: { fontFamily: tableFontFamily } }}
+                  />
+
+                  <TextField
+                    label="Building"
+                    fullWidth
+                    size="small"
+                    value={newCustomer.building}
+                    onChange={(e) =>
+                      handleFieldChange("building", e.target.value)
+                    }
+                    InputProps={{ sx: { fontFamily: tableFontFamily } }}
+                    InputLabelProps={{ sx: { fontFamily: tableFontFamily } }}
+                  />
+                </Box>
+              </Stack>
+            </Box>
           </Stack>
         </DialogContent>
 

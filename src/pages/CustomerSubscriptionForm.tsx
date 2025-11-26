@@ -20,8 +20,14 @@ import {
   DialogActions,
   MenuItem,
   InputAdornment,
+  Switch,
+  FormControlLabel,
+  IconButton,
+  Tooltip,
 } from "@mui/material";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import axios from "axios";
+import wishMoneyLogo from "../assets/wishmoneylogo.png";
 
 const API_BASE_URL = "http://127.0.0.1:5100";
 
@@ -39,15 +45,26 @@ type CustomerSubscription = {
   service_code: string;
   service_name: string;
   amount: number;
-  billing_date?: string | null; // backend field (YYYY-MM-DD)
-  service_currency?: Currency | null; // for grid display
+  service_currency?: Currency | null;
+  billing_date?: string | null;
+  payment_method?: string | null;
+  manager_empcode?: string | null;
+  manager_fullname?: string | null;
+  manager_username?: string | null;
+
+  // status in UI (derived from subscription_status INT)
+  status?: "active" | "stopped" | null;
 };
 
 type NewSubscription = {
   customer_username: string;
   service_code: string;
   amount: string;
-  billing_date: string; // full date in "YYYY-MM-DD"
+  billing_date: string;
+  manager_empcode: string;
+
+  // form status
+  status: "active" | "stopped";
 };
 
 type FormErrors = Partial<Record<keyof NewSubscription, string>>;
@@ -58,6 +75,11 @@ type SaveSubscriptionPayload = {
   service_code: string;
   amount: string | number;
   billing_date?: string;
+  payment_method?: string;
+  manager_empcode?: string;
+
+  // send to backend (backend converts to 0/1)
+  subscription_status?: "active" | "stopped";
 };
 
 type SortKey = keyof Pick<
@@ -66,8 +88,8 @@ type SortKey = keyof Pick<
   | "customer_fullname"
   | "service_code"
   | "service_name"
+  | "service_currency"
   | "amount"
-  | "billing_date"
 >;
 
 type CustomerOption = {
@@ -82,6 +104,12 @@ type ServiceOption = {
   service_currency: Currency;
 };
 
+type EmployeeOption = {
+  empcode: string;
+  fullname: string;
+  username?: string;
+};
+
 const saveSubscription = async (data: SaveSubscriptionPayload) => {
   const res = await axios.post(
     `${API_BASE_URL}/api/customer-subscriptions/savesubscription`,
@@ -90,43 +118,43 @@ const saveSubscription = async (data: SaveSubscriptionPayload) => {
   return res.data;
 };
 
-// helper for "YYYY-MM" (used for filter)
-const getCurrentMonthValue = (): string => {
-  const d = new Date();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${d.getFullYear()}-${m}`;
+const deleteSubscription = async (id: number) => {
+  const res = await axios.delete(
+    `${API_BASE_URL}/api/customer-subscriptions/delete/${id}`
+  );
+  return res.data;
 };
 
-// helper for "YYYY-MM-DD" (used for dialog)
 const getCurrentDateValue = (): string => {
   const d = new Date();
-  const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return `${d.getFullYear()}-${m}-${day}`;
 };
 
-// pretty display for grid
-const formatBillingDate = (val?: string | null) => {
-  if (!val) return "";
-  // expects YYYY-MM-DD
-  try {
-    const d = new Date(val);
-    if (Number.isNaN(d.getTime())) return val.toString().slice(0, 10);
-    return d.toLocaleDateString();
-  } catch {
-    return val.toString().slice(0, 10);
+// helper: normalize backend INT/STRING to UI status
+const mapApiStatus = (row: any): "active" | "stopped" => {
+  const v =
+    row.subscription_status ??
+    row.subscriptionStatus ??
+    row.status ??
+    row.subscription_status_value;
+
+  if (v === 0 || v === "0") return "stopped";
+  if (v === 1 || v === "1") return "active";
+
+  if (typeof v === "string") {
+    const t = v.toLowerCase().trim();
+    if (t === "stopped" || t === "stop" || t === "inactive") return "stopped";
   }
+
+  return "active";
 };
 
 const CustomerSubscriptionForm: React.FC = () => {
   const [subscriptions, setSubscriptions] = useState<CustomerSubscription[]>([]);
   const [customerFilter, setCustomerFilter] = useState("");
   const [serviceFilter, setServiceFilter] = useState("");
-
-  const [monthFilter, setMonthFilter] = useState<string>(() =>
-    getCurrentMonthValue()
-  );
 
   const [order, setOrder] = useState<Order>("asc");
   const [orderBy, setOrderBy] = useState<SortKey>("customer_fullname");
@@ -142,6 +170,8 @@ const CustomerSubscriptionForm: React.FC = () => {
     service_code: "",
     amount: "",
     billing_date: getCurrentDateValue(),
+    manager_empcode: "",
+    status: "active",
   };
 
   const [newSub, setNewSub] = useState<NewSubscription>(emptySubForm);
@@ -149,7 +179,16 @@ const CustomerSubscriptionForm: React.FC = () => {
 
   const [customerOptions, setCustomerOptions] = useState<CustomerOption[]>([]);
   const [serviceOptions, setServiceOptions] = useState<ServiceOption[]>([]);
+  const [employeeOptions, setEmployeeOptions] = useState<EmployeeOption[]>([]);
+
   const [priceCurrency, setPriceCurrency] = useState<Currency>("USD");
+  const [wishMoney, setWishMoney] = useState<boolean>(false);
+
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
+
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] =
+    useState<CustomerSubscription | null>(null);
 
   const loadSubscriptions = async () => {
     try {
@@ -158,16 +197,42 @@ const CustomerSubscriptionForm: React.FC = () => {
 
       const mapped: CustomerSubscription[] = apiData.map((row) => ({
         id: row.id,
-        customer_username: row.customer_username ?? "",
-        customer_fullname: row.customer_fullname ?? "",
-        service_code: row.service_code ?? "",
+        customer_username: (row.customer_username ?? "").toString().trim(),
+        customer_fullname: row.customer_fullname ?? row.fullname ?? "",
+        service_code: (row.service_code ?? "").toString().trim(),
         service_name: row.service_name ?? "",
         amount:
           typeof row.amount === "number" ? row.amount : Number(row.amount ?? 0),
-        billing_date: row.billing_date ?? null,
-        service_currency: (row.service_currency ||
-          row.currency ||
-          null) as Currency | null,
+        service_currency: (row.service_currency ?? null) as Currency | null,
+        billing_date: row.billing_date
+          ? new Date(row.billing_date).toISOString().slice(0, 10)
+          : null,
+        payment_method: row.payment_method ?? null,
+        manager_empcode:
+          row.manager_empcode ??
+          row.emp_manager ??
+          row.EmpManager ??
+          row.empcode_manager ??
+          row.manager_code ??
+          row.managerEmpCode ??
+          null,
+        manager_fullname:
+          row.manager_fullname ??
+          row.manager_name ??
+          row.emp_manager_fullname ??
+          row.emp_manager_name ??
+          row.employee_manager ??
+          null,
+        manager_username:
+          row.manager_username ??
+          row.emp_manager_username ??
+          row.manager_user ??
+          row.emp_manager_user ??
+          row.managerUsername ??
+          null,
+
+        // ✅ INT -> UI status
+        status: mapApiStatus(row),
       }));
 
       setSubscriptions(mapped);
@@ -182,7 +247,7 @@ const CustomerSubscriptionForm: React.FC = () => {
       const apiData = res.data as any[];
 
       const mapped: CustomerOption[] = apiData.map((row) => ({
-        username: row.username ?? "",
+        username: (row.username ?? "").toString().trim(),
         fullname: row.fullname ?? "",
       }));
 
@@ -198,7 +263,7 @@ const CustomerSubscriptionForm: React.FC = () => {
       const apiData = res.data as any[];
 
       const mapped: ServiceOption[] = apiData.map((row) => ({
-        service_code: row.service_code ?? "",
+        service_code: (row.service_code ?? "").toString().trim(),
         service_name: row.service_name ?? "",
         service_price:
           typeof row.service_price === "number"
@@ -213,10 +278,54 @@ const CustomerSubscriptionForm: React.FC = () => {
     }
   };
 
+  const loadEmployees = async () => {
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/employees`);
+      const apiData = Array.isArray(res.data) ? res.data : [];
+
+      const mapped: EmployeeOption[] = apiData
+        .map((row: any) => {
+          const empcode = (row.EmpCode ?? row.empcode ?? row.code ?? row.id ?? "")
+            .toString()
+            .trim();
+          const username = (
+            row.username ??
+            row.EmpUser ??
+            row.user ??
+            row.UserName ??
+            row.emp_username ??
+            ""
+          )
+            .toString()
+            .trim();
+          const fullname =
+            row.fullname ??
+            row.FullName ??
+            row.name ??
+            row.empname ??
+            row.EnglishName ??
+            "";
+
+          return {
+            empcode: username || empcode,
+            fullname: fullname || username || empcode,
+            username: username || undefined,
+          };
+        })
+        .filter((e: EmployeeOption) => e.empcode);
+
+      setEmployeeOptions(mapped);
+    } catch (e) {
+      console.warn("Could not load employees for dropdown.", e);
+      setEmployeeOptions([]);
+    }
+  };
+
   useEffect(() => {
     loadSubscriptions();
     loadCustomers();
     loadServices();
+    loadEmployees();
   }, []);
 
   const handleRequestSort = (property: SortKey) => {
@@ -238,12 +347,7 @@ const CustomerSubscriptionForm: React.FC = () => {
         !serviceFilter ||
         serviceCombined.toLowerCase().includes(serviceFilter.toLowerCase());
 
-      const monthMatch =
-        !monthFilter ||
-        (!!s.billing_date &&
-          s.billing_date.toString().startsWith(monthFilter)); // YYYY-MM match
-
-      return customerMatch && serviceMatch && monthMatch;
+      return customerMatch && serviceMatch;
     });
 
     return [...filtered].sort((a, b) => {
@@ -258,14 +362,6 @@ const CustomerSubscriptionForm: React.FC = () => {
         return 0;
       }
 
-      if (orderBy === "billing_date") {
-        const aTime = aVal ? new Date(String(aVal)).getTime() : 0;
-        const bTime = bVal ? new Date(String(bVal)).getTime() : 0;
-        if (aTime < bTime) return order === "asc" ? -1 : 1;
-        if (aTime > bTime) return order === "asc" ? 1 : -1;
-        return 0;
-      }
-
       const aStr = (aVal ?? "").toString().toLowerCase();
       const bStr = (bVal ?? "").toString().toLowerCase();
 
@@ -273,25 +369,21 @@ const CustomerSubscriptionForm: React.FC = () => {
       if (aStr > bStr) return order === "asc" ? 1 : -1;
       return 0;
     });
-  }, [
-    subscriptions,
-    customerFilter,
-    serviceFilter,
-    monthFilter,
-    order,
-    orderBy,
-  ]);
+  }, [subscriptions, customerFilter, serviceFilter, order, orderBy]);
 
   const handleOpenNew = () => {
     setModalMode("add");
     setEditingId(null);
     setFormErrors({});
     setError(null);
+    setDuplicateError(null);
     setNewSub({
       ...emptySubForm,
       billing_date: getCurrentDateValue(),
+      status: "active",
     });
     setPriceCurrency("USD");
+    setWishMoney(false);
     setOpenSubModal(true);
   };
 
@@ -300,6 +392,8 @@ const CustomerSubscriptionForm: React.FC = () => {
     setNewSub(emptySubForm);
     setFormErrors({});
     setEditingId(null);
+    setWishMoney(false);
+    setDuplicateError(null);
   };
 
   const validateForm = (): boolean => {
@@ -325,15 +419,72 @@ const CustomerSubscriptionForm: React.FC = () => {
 
   const handleSaveSubscription = async () => {
     setError(null);
+    setDuplicateError(null);
+
     if (!validateForm()) return;
 
     try {
+      const latestRes = await axios.get(
+        `${API_BASE_URL}/api/customer-subscriptions`
+      );
+      const latestData = latestRes.data as any[];
+
+      const latestSubs: CustomerSubscription[] = latestData.map((row) => ({
+        id: row.id,
+        customer_username: (row.customer_username ?? "").toString().trim(),
+        customer_fullname: row.customer_fullname ?? row.fullname ?? "",
+        service_code: (row.service_code ?? "").toString().trim(),
+        service_name: row.service_name ?? "",
+        amount:
+          typeof row.amount === "number" ? row.amount : Number(row.amount ?? 0),
+        service_currency: (row.service_currency ?? null) as Currency | null,
+        billing_date: row.billing_date
+          ? new Date(row.billing_date).toISOString().slice(0, 10)
+          : null,
+        payment_method: row.payment_method ?? null,
+        manager_empcode:
+          row.manager_empcode ??
+          row.emp_manager ??
+          row.EmpManager ??
+          row.empcode_manager ??
+          row.manager_code ??
+          null,
+        manager_fullname:
+          row.manager_fullname ??
+          row.manager_name ??
+          row.emp_manager_fullname ??
+          row.employee_manager ??
+          null,
+        manager_username:
+          row.manager_username ??
+          row.emp_manager_username ??
+          row.manager_user ??
+          null,
+        status: mapApiStatus(row),
+      }));
+
+      const normalizedCustomer = newSub.customer_username.trim();
+
+      if (modalMode === "add") {
+        const existsForCustomer = latestSubs.some(
+          (x) => x.customer_username === normalizedCustomer
+        );
+        if (existsForCustomer) {
+          setDuplicateError("This client already has a subscription.");
+          return;
+        }
+      }
+
       await saveSubscription({
         id: modalMode === "edit" && editingId != null ? editingId : undefined,
-        customer_username: newSub.customer_username,
-        service_code: newSub.service_code,
+        customer_username: normalizedCustomer,
+        service_code: newSub.service_code.trim(),
         amount: newSub.amount,
         billing_date: newSub.billing_date || undefined,
+        payment_method: wishMoney ? "wish_money" : undefined,
+        manager_empcode: newSub.manager_empcode.trim() || undefined,
+        // ✅ send status string; backend converts to 0/1
+        subscription_status: newSub.status,
       });
 
       handleCloseSubModal();
@@ -350,6 +501,7 @@ const CustomerSubscriptionForm: React.FC = () => {
     setEditingId(s.id);
     setFormErrors({});
     setError(null);
+    setDuplicateError(null);
 
     setNewSub({
       customer_username: s.customer_username,
@@ -358,14 +510,43 @@ const CustomerSubscriptionForm: React.FC = () => {
       billing_date: s.billing_date
         ? s.billing_date.toString().slice(0, 10)
         : getCurrentDateValue(),
+      manager_empcode:
+        (s.manager_empcode ?? s.manager_username ?? "").toString(),
+      status: s.status === "stopped" ? "stopped" : "active",
     });
 
     const found = serviceOptions.find(
       (opt) => opt.service_code === s.service_code
     );
-    setPriceCurrency(found?.service_currency || s.service_currency || "USD");
+    setPriceCurrency(s.service_currency || found?.service_currency || "USD");
 
+    setWishMoney((s.payment_method || "").toLowerCase() === "wish_money");
     setOpenSubModal(true);
+  };
+
+  const askDeleteSubscription = (sub: CustomerSubscription) => {
+    setDeleteTarget(sub);
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDeleteSubscription = async () => {
+    if (!deleteTarget) return;
+
+    try {
+      await deleteSubscription(deleteTarget.id);
+      setDeleteDialogOpen(false);
+      setDeleteTarget(null);
+      await loadSubscriptions();
+    } catch (err: any) {
+      console.error("Failed to delete subscription", err);
+      const apiError = err?.response?.data?.error;
+      setError(apiError || "Failed to delete subscription");
+    }
+  };
+
+  const cancelDeleteSubscription = () => {
+    setDeleteDialogOpen(false);
+    setDeleteTarget(null);
   };
 
   const renderSortableHeaderCell = (label: string, property: SortKey) => (
@@ -377,7 +558,6 @@ const CustomerSubscriptionForm: React.FC = () => {
         color: "#fff",
         whiteSpace: "nowrap",
         userSelect: "none",
-        textAlign: "center",
       }}
       sortDirection={orderBy === property ? order : false}
     >
@@ -396,9 +576,10 @@ const CustomerSubscriptionForm: React.FC = () => {
     </TableCell>
   );
 
-  const handleFieldChange = (key: keyof NewSubscription, value: string) => {
+  const handleFieldChange = (key: keyof NewSubscription, value: any) => {
     setNewSub((prev) => ({ ...prev, [key]: value }));
     setFormErrors((prev) => ({ ...prev, [key]: undefined }));
+    setDuplicateError(null);
   };
 
   const handleServiceChange = (serviceCode: string) => {
@@ -412,12 +593,67 @@ const CustomerSubscriptionForm: React.FC = () => {
     }
   };
 
-  const getRowCurrency = (s: CustomerSubscription): Currency => {
-    if (s.service_currency) return s.service_currency;
-    const found = serviceOptions.find(
-      (opt) => opt.service_code === s.service_code
+  const renderManagerCell = (s: CustomerSubscription) => {
+    const emp =
+      s.manager_empcode
+        ? employeeOptions.find(
+            (e) =>
+              e.empcode === s.manager_empcode ||
+              e.username === s.manager_empcode
+          )
+        : undefined;
+
+    const name =
+      s.manager_fullname ||
+      emp?.fullname ||
+      (s.manager_username || emp?.username) ||
+      "";
+
+    const user =
+      s.manager_username ||
+      emp?.username ||
+      (s.manager_empcode || "");
+
+    if (!name && !user) return "—";
+    if (name && user) return `${name} (${user})`;
+    return name || user;
+  };
+
+  const renderStatusDot = (status?: "active" | "stopped" | null) => {
+    const active = status !== "stopped";
+    return (
+      <Box
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 0.8,
+          justifyContent: "center",
+        }}
+      >
+        <Box
+          sx={{
+            width: 10,
+            height: 10,
+            borderRadius: "50%",
+            bgcolor: active ? "#16a34a" : "#ef4444",
+            boxShadow: active
+              ? "0 0 0 3px rgba(22,163,74,0.12)"
+              : "0 0 0 3px rgba(239,68,68,0.12)",
+          }}
+        />
+        <Typography
+          variant="caption"
+          sx={{
+            fontFamily: tableFontFamily,
+            fontWeight: 700,
+            color: active ? "#166534" : "#991b1b",
+            letterSpacing: 0.2,
+          }}
+        >
+          {active ? "Active" : "Stopped"}
+        </Typography>
+      </Box>
     );
-    return found?.service_currency || "USD";
   };
 
   return (
@@ -521,29 +757,6 @@ const CustomerSubscriptionForm: React.FC = () => {
           alignItems={{ xs: "stretch", md: "flex-end" }}
         >
           <TextField
-            label="Month"
-            variant="outlined"
-            size="small"
-            type="month"
-            value={monthFilter}
-            onChange={(e) => setMonthFilter(e.target.value)}
-            InputProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.9rem",
-              },
-            }}
-            InputLabelProps={{
-              shrink: true,
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.85rem",
-              },
-            }}
-            sx={{ minWidth: 180 }}
-          />
-
-          <TextField
             label="Customer (Code / Name)"
             variant="outlined"
             size="small"
@@ -551,16 +764,10 @@ const CustomerSubscriptionForm: React.FC = () => {
             value={customerFilter}
             onChange={(e) => setCustomerFilter(e.target.value)}
             InputProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.9rem",
-              },
+              sx: { fontFamily: tableFontFamily, fontSize: "0.9rem" },
             }}
             InputLabelProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.85rem",
-              },
+              sx: { fontFamily: tableFontFamily, fontSize: "0.85rem" },
             }}
           />
           <TextField
@@ -571,66 +778,23 @@ const CustomerSubscriptionForm: React.FC = () => {
             value={serviceFilter}
             onChange={(e) => setServiceFilter(e.target.value)}
             InputProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.9rem",
-              },
+              sx: { fontFamily: tableFontFamily, fontSize: "0.9rem" },
             }}
             InputLabelProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.85rem",
-              },
+              sx: { fontFamily: tableFontFamily, fontSize: "0.85rem" },
             }}
           />
         </Stack>
       </Paper>
 
-      <Paper
-        sx={{
-          borderRadius: 2,
-          boxShadow: 3,
-          overflow: "hidden",
-        }}
-      >
-        <TableContainer
-          sx={{
-            maxHeight: "65vh",
-            fontFamily: tableFontFamily,
-            userSelect: "none",
-          }}
-        >
-          <Table
-            stickyHeader
-            size="small"
-            sx={{
-              "& td, & th": {
-                fontFamily: tableFontFamily,
-                textAlign: "center",
-              },
-              "& th .MuiTableSortLabel-root": {
-                marginLeft: "auto",
-                marginRight: "auto",
-              },
-            }}
-          >
+      <Paper sx={{ borderRadius: 2, boxShadow: 3, overflow: "hidden" }}>
+        <TableContainer sx={{ maxHeight: "65vh", userSelect: "none" }}>
+          <Table stickyHeader size="small">
             <TableHead>
-              <TableRow
-                sx={{
-                  "& th": {
-                    backgroundColor: "#004d40",
-                  },
-                }}
-              >
+              <TableRow sx={{ "& th": { backgroundColor: "#004d40" } }}>
                 {renderSortableHeaderCell("Customer Code", "customer_username")}
-                {renderSortableHeaderCell(
-                  "Customer Name",
-                  "customer_fullname"
-                )}
-                {renderSortableHeaderCell("Service Code", "service_code")}
-                {renderSortableHeaderCell("Service Name", "service_name")}
-                {renderSortableHeaderCell("Price", "amount")}
-                {renderSortableHeaderCell("Billing Date", "billing_date")}
+                {renderSortableHeaderCell("Customer Name", "customer_fullname")}
+
                 <TableCell
                   sx={{
                     fontFamily: tableFontFamily,
@@ -638,11 +802,39 @@ const CustomerSubscriptionForm: React.FC = () => {
                     fontSize: "0.95rem",
                     color: "#fff",
                     whiteSpace: "nowrap",
-                    userSelect: "none",
                     textAlign: "center",
                   }}
                 >
-                  Currency
+                  Status
+                </TableCell>
+
+                <TableCell
+                  sx={{
+                    fontFamily: tableFontFamily,
+                    fontWeight: 700,
+                    fontSize: "0.95rem",
+                    color: "#fff",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Manager
+                </TableCell>
+
+                {renderSortableHeaderCell("Service Code", "service_code")}
+                {renderSortableHeaderCell("Service Name", "service_name")}
+                {renderSortableHeaderCell("Currency", "service_currency")}
+                {renderSortableHeaderCell("Price", "amount")}
+                <TableCell
+                  sx={{
+                    fontFamily: tableFontFamily,
+                    fontWeight: 700,
+                    fontSize: "0.95rem",
+                    color: "#fff",
+                    whiteSpace: "nowrap",
+                    textAlign: "center",
+                  }}
+                >
+                  Delete
                 </TableCell>
               </TableRow>
             </TableHead>
@@ -650,82 +842,87 @@ const CustomerSubscriptionForm: React.FC = () => {
             <TableBody>
               {filteredAndSortedSubscriptions.length === 0 ? (
                 <TableRow tabIndex={-1}>
-                  <TableCell colSpan={7} align="center">
-                    <Typography
-                      variant="body2"
-                      color="text.secondary"
-                      sx={{ fontFamily: tableFontFamily }}
-                    >
+                  <TableCell colSpan={9} align="center">
+                    <Typography variant="body2" color="text.secondary">
                       No subscriptions found.
                     </Typography>
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredAndSortedSubscriptions.map((s, index) => (
-                  <TableRow
-                    key={s.id}
-                    tabIndex={-1}
-                    hover
-                    onDoubleClick={() => handleRowDoubleClick(s)}
-                    sx={{
-                      backgroundColor:
-                        index % 2 === 0 ? "background.paper" : "#f5f5f5",
-                      "&:hover": {
-                        backgroundColor: "#e0f2f1",
-                      },
-                      "&:focus": {
-                        outline: "none",
-                      },
-                      cursor: "default",
-                    }}
-                  >
-                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 600 }}>
-                      {s.customer_username}
-                    </TableCell>
-                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
-                      {s.customer_fullname}
-                    </TableCell>
-                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
-                      {s.service_code}
-                    </TableCell>
-                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
-                      {s.service_name}
-                    </TableCell>
-                    <TableCell
+                filteredAndSortedSubscriptions.map((s, index) => {
+                  const fallbackCurrency =
+                    s.service_currency ||
+                    serviceOptions.find(
+                      (x) => x.service_code === s.service_code
+                    )?.service_currency ||
+                    "USD";
+
+                  return (
+                    <TableRow
+                      key={s.id}
+                      hover
+                      onDoubleClick={() => handleRowDoubleClick(s)}
                       sx={{
-                        fontSize: "0.9rem",
-                        fontWeight: 500,
-                        textAlign: "right",
+                        backgroundColor:
+                          index % 2 === 0 ? "background.paper" : "#f5f5f5",
+                        "&:hover": { backgroundColor: "#e0f2f1" },
+                        cursor: "default",
                       }}
                     >
-                      {s.amount.toFixed(2)}
-                    </TableCell>
-                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
-                      {formatBillingDate(s.billing_date)}
-                    </TableCell>
-                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 600 }}>
-                      {getRowCurrency(s)}
-                    </TableCell>
-                  </TableRow>
-                ))
+                      <TableCell sx={{ fontWeight: 600 }}>
+                        {s.customer_username}
+                      </TableCell>
+                      <TableCell>{s.customer_fullname}</TableCell>
+
+                      <TableCell sx={{ textAlign: "center" }}>
+                        {renderStatusDot(s.status)}
+                      </TableCell>
+
+                      <TableCell>{renderManagerCell(s)}</TableCell>
+                      <TableCell>{s.service_code}</TableCell>
+                      <TableCell>{s.service_name}</TableCell>
+                      <TableCell sx={{ fontWeight: 600, textAlign: "center" }}>
+                        {fallbackCurrency}
+                      </TableCell>
+                      <TableCell sx={{ textAlign: "right" }}>
+                        {s.amount.toFixed(2)}
+                      </TableCell>
+
+                      <TableCell sx={{ textAlign: "center" }}>
+                        <Tooltip title="Delete subscription">
+                          <IconButton
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              askDeleteSubscription(s);
+                            }}
+                            sx={{
+                              color: "#c62828",
+                              "&:hover": {
+                                bgcolor: "rgba(198,40,40,0.08)",
+                              },
+                            }}
+                          >
+                            <DeleteOutlineIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>
         </TableContainer>
       </Paper>
 
+      {/* ===== Add/Edit Dialog ===== */}
       <Dialog
         open={openSubModal}
         onClose={handleCloseSubModal}
         maxWidth="sm"
         fullWidth
-        PaperProps={{
-          sx: {
-            borderRadius: 3,
-            p: 1,
-            bgcolor: "#fafafa",
-          },
-        }}
+        PaperProps={{ sx: { borderRadius: 3, p: 1, bgcolor: "#fafafa" } }}
       >
         <DialogTitle
           sx={{
@@ -743,96 +940,321 @@ const CustomerSubscriptionForm: React.FC = () => {
         </DialogTitle>
 
         <DialogContent sx={{ mt: 2 }}>
-          <Stack spacing={2}>
-            <TextField
-              label="Customer"
-              fullWidth
-              size="small"
-              select
-              value={newSub.customer_username}
-              onChange={(e) =>
-                handleFieldChange("customer_username", e.target.value)
-              }
-              error={!!formErrors.customer_username}
-              helperText={formErrors.customer_username || " "}
-              InputProps={{ sx: { fontFamily: tableFontFamily } }}
-              InputLabelProps={{ sx: { fontFamily: tableFontFamily } }}
-            >
-              {customerOptions.map((c) => (
-                <MenuItem key={c.username} value={c.username}>
-                  {c.fullname} ({c.username})
-                </MenuItem>
-              ))}
-            </TextField>
-
-            <TextField
-              label="Service"
-              fullWidth
-              size="small"
-              select
-              value={newSub.service_code}
-              onChange={(e) => handleServiceChange(e.target.value)}
-              error={!!formErrors.service_code}
-              helperText={formErrors.service_code || " "}
-              InputProps={{ sx: { fontFamily: tableFontFamily } }}
-              InputLabelProps={{ sx: { fontFamily: tableFontFamily } }}
-            >
-              {serviceOptions.map((s) => (
-                <MenuItem key={s.service_code} value={s.service_code}>
-                  {s.service_name} ({s.service_code})
-                </MenuItem>
-              ))}
-            </TextField>
-
-            <TextField
-              label="Billing Date"
-              fullWidth
-              size="small"
-              type="date"
-              value={newSub.billing_date}
-              onChange={(e) =>
-                handleFieldChange("billing_date", e.target.value)
-              }
-              InputProps={{
-                sx: {
+          <Paper
+            elevation={0}
+            sx={{
+              p: 2,
+              borderRadius: 2,
+              border: "1px solid #e0e0e0",
+              bgcolor: "#ffffff",
+            }}
+          >
+            <Stack spacing={1.25} sx={{ mb: 1.5 }}>
+              <Typography
+                variant="subtitle2"
+                sx={{
                   fontFamily: tableFontFamily,
-                  fontSize: "0.9rem",
-                },
-              }}
-              InputLabelProps={{
-                shrink: true,
-                sx: { fontFamily: tableFontFamily },
-              }}
-            />
+                  fontWeight: 800,
+                  color: "#00695c",
+                  letterSpacing: 0.3,
+                  textTransform: "uppercase",
+                  fontSize: "0.8rem",
+                }}
+              >
+                General Info
+              </Typography>
+              <Divider />
+            </Stack>
 
-            <TextField
-              label="Price"
-              fullWidth
-              size="small"
-              type="number"
-              value={newSub.amount}
-              onChange={(e) => handleFieldChange("amount", e.target.value)}
-              error={!!formErrors.amount}
-              helperText={formErrors.amount || " "}
-              disabled
-              InputProps={{
-                sx: { fontFamily: tableFontFamily },
-                endAdornment: (
-                  <InputAdornment position="end">
-                    {priceCurrency}
-                  </InputAdornment>
-                ),
+            <Stack spacing={2}>
+              <TextField
+                label="Customer"
+                fullWidth
+                size="small"
+                select
+                value={newSub.customer_username}
+                onChange={(e) =>
+                  handleFieldChange("customer_username", e.target.value)
+                }
+                error={!!formErrors.customer_username}
+                helperText={formErrors.customer_username || " "}
+              >
+                {customerOptions.map((c) => (
+                  <MenuItem key={c.username} value={c.username}>
+                    {c.fullname} ({c.username})
+                  </MenuItem>
+                ))}
+              </TextField>
+
+              <TextField
+                label="Service"
+                fullWidth
+                size="small"
+                select
+                value={newSub.service_code}
+                onChange={(e) => handleServiceChange(e.target.value)}
+                error={!!formErrors.service_code}
+                helperText={formErrors.service_code || " "}
+              >
+                {serviceOptions.map((s) => (
+                  <MenuItem key={s.service_code} value={s.service_code}>
+                    {s.service_name} ({s.service_code})
+                  </MenuItem>
+                ))}
+              </TextField>
+
+              <TextField
+                label="Employee Manager"
+                fullWidth
+                size="small"
+                select
+                value={newSub.manager_empcode}
+                onChange={(e) =>
+                  handleFieldChange("manager_empcode", e.target.value)
+                }
+                helperText=" "
+              >
+                <MenuItem value="">
+                  <em>None</em>
+                </MenuItem>
+                {employeeOptions.map((emp) => (
+                  <MenuItem key={emp.empcode} value={emp.empcode}>
+                    {emp.fullname}
+                    {emp.username ? ` (${emp.username})` : ` (${emp.empcode})`}
+                  </MenuItem>
+                ))}
+              </TextField>
+
+              <TextField
+                label="Billing Date"
+                fullWidth
+                size="small"
+                type="date"
+                value={newSub.billing_date}
+                onChange={(e) =>
+                  handleFieldChange("billing_date", e.target.value)
+                }
+                InputLabelProps={{ shrink: true }}
+              />
+
+              {/* ✅ Status Switch */}
+              <FormControlLabel
+                sx={{
+                  mt: 0.5,
+                  ml: 0,
+                  px: 1,
+                  py: 0.5,
+                  borderRadius: 2,
+                  border: "1px solid #e5e7eb",
+                  bgcolor: newSub.status === "active" ? "#ecfdf5" : "#fff1f2",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  fontFamily: tableFontFamily,
+                  ".MuiFormControlLabel-label": {
+                    fontFamily: tableFontFamily,
+                    fontSize: "0.95rem",
+                    fontWeight: 700,
+                    color:
+                      newSub.status === "active" ? "#065f46" : "#9f1239",
+                  },
+                }}
+                control={
+                  <Switch
+                    checked={newSub.status === "active"}
+                    onChange={(e) =>
+                      handleFieldChange(
+                        "status",
+                        e.target.checked ? "active" : "stopped"
+                      )
+                    }
+                    sx={{
+                      "& .MuiSwitch-switchBase.Mui-checked": {
+                        color: "#10b981",
+                      },
+                      "& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track":
+                        {
+                          backgroundColor: "#10b981",
+                        },
+                      "& .MuiSwitch-track": { backgroundColor: "#f43f5e" },
+                    }}
+                  />
+                }
+                label={
+                  newSub.status === "active"
+                    ? "Subscription Active"
+                    : "Subscription Stopped"
+                }
+              />
+
+              {/* Wish Money */}
+              <FormControlLabel
+                sx={{
+                  mt: 0.5,
+                  ml: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  fontFamily: tableFontFamily,
+                  ".MuiFormControlLabel-label": {
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 1,
+                    fontFamily: tableFontFamily,
+                    fontSize: "0.95rem",
+                    fontWeight: 600,
+                  },
+                }}
+                control={
+                  <Switch
+                    checked={wishMoney}
+                    onChange={(e) => setWishMoney(e.target.checked)}
+                  />
+                }
+                label={
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <img
+                      src={wishMoneyLogo}
+                      alt="Wish Money"
+                      style={{ height: 32, width: "auto" }}
+                    />
+                    Wish Money
+                  </span>
+                }
+              />
+
+              <TextField
+                label="Price"
+                fullWidth
+                size="small"
+                type="number"
+                value={newSub.amount}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setNewSub((prev) => ({ ...prev, amount: val }));
+                  setFormErrors((prev) => ({ ...prev, amount: undefined }));
+                  setDuplicateError(null);
+                }}
+                error={!!formErrors.amount}
+                helperText={formErrors.amount || " "}
+                inputProps={{ min: 0, step: "any" }}
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      {priceCurrency}
+                    </InputAdornment>
+                  ),
+                }}
+              />
+            </Stack>
+          </Paper>
+        </DialogContent>
+
+        <DialogActions
+          sx={{
+            p: 2,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-end",
+            gap: 1,
+          }}
+        >
+          {duplicateError && (
+            <Typography
+              color="error"
+              sx={{ fontWeight: 700, fontSize: "0.9rem" }}
+            >
+              {duplicateError}
+            </Typography>
+          )}
+
+          <Box sx={{ display: "flex", gap: 1 }}>
+            <Button onClick={handleCloseSubModal} sx={{ textTransform: "none" }}>
+              Cancel
+            </Button>
+
+            <Button
+              variant="contained"
+              onClick={handleSaveSubscription}
+              sx={{
+                textTransform: "none",
+                fontWeight: 600,
+                bgcolor: "#00897b",
+                "&:hover": { bgcolor: "#00796b" },
               }}
-              InputLabelProps={{ sx: { fontFamily: tableFontFamily } }}
-            />
-          </Stack>
+            >
+              Save
+            </Button>
+          </Box>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Dialog */}
+      <Dialog
+        open={deleteDialogOpen}
+        onClose={cancelDeleteSubscription}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 2.5,
+            border: "1px solid #ffcdd2",
+            bgcolor: "#fff5f5",
+          },
+        }}
+      >
+        <DialogTitle
+          sx={{
+            fontFamily: tableFontFamily,
+            fontWeight: 700,
+            fontSize: "1.05rem",
+            color: "#b71c1c",
+            pb: 1,
+          }}
+        >
+          Delete subscription?
+        </DialogTitle>
+
+        <DialogContent sx={{ pt: 0 }}>
+          <Typography
+            sx={{
+              fontFamily: tableFontFamily,
+              fontSize: "0.95rem",
+              color: "#444",
+              mb: 1,
+            }}
+          >
+            This action cannot be undone.
+          </Typography>
+
+          {deleteTarget && (
+            <Box
+              sx={{
+                p: 1.2,
+                borderRadius: 1.5,
+                bgcolor: "white",
+                border: "1px solid #ffe0e0",
+              }}
+            >
+              <Typography sx={{ fontWeight: 700, fontFamily: tableFontFamily }}>
+                {deleteTarget.customer_fullname}
+              </Typography>
+              <Typography
+                variant="body2"
+                sx={{ color: "text.secondary", fontFamily: tableFontFamily }}
+              >
+                {deleteTarget.service_name} ({deleteTarget.service_code})
+              </Typography>
+            </Box>
+          )}
         </DialogContent>
 
         <DialogActions sx={{ p: 2 }}>
           <Button
-            onClick={handleCloseSubModal}
+            onClick={cancelDeleteSubscription}
             sx={{
               textTransform: "none",
+              fontWeight: 600,
               fontFamily: tableFontFamily,
               color: "#555",
             }}
@@ -842,16 +1264,20 @@ const CustomerSubscriptionForm: React.FC = () => {
 
           <Button
             variant="contained"
-            onClick={handleSaveSubscription}
+            onClick={confirmDeleteSubscription}
             sx={{
               textTransform: "none",
-              fontWeight: 600,
+              fontWeight: 700,
               fontFamily: tableFontFamily,
-              bgcolor: "#00897b",
-              "&:hover": { bgcolor: "#00796b" },
+              bgcolor: "#ef5350",
+              color: "white",
+              borderRadius: 2,
+              px: 2.5,
+              "&:hover": { bgcolor: "#e53935" },
             }}
+            startIcon={<DeleteOutlineIcon />}
           >
-            Save
+            Delete
           </Button>
         </DialogActions>
       </Dialog>

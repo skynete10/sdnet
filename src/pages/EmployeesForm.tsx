@@ -18,9 +18,18 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  Checkbox,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  OutlinedInput,
+  ListItemText,
+  IconButton,
 } from "@mui/material";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import DownloadIcon from "@mui/icons-material/Download";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import axios from "axios";
 import * as XLSX from "xlsx";
 
@@ -54,7 +63,7 @@ type NewEmployee = {
 type FormErrors = Partial<Record<keyof NewEmployee, string>>;
 
 type SaveEmployeePayload = {
-  id?: number; // omit for add, set for edit
+  id?: number;
   fullname: string;
   mobile: string;
   username: string;
@@ -81,16 +90,29 @@ type SortKey = keyof Pick<
   | "type"
 >;
 
+type ModalCustomer = {
+  username: string;
+  fullname: string;
+  mobile: string;
+  address?: string;
+};
+
 const tableFontFamily =
   '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif';
 
-// ---- API helper: save employee (add or edit) ----
 const saveEmployee = async (data: SaveEmployeePayload) => {
   const res = await axios.post(
     `${API_BASE_URL}/api/employees/saveemployee`,
     data
   );
   return res.data;
+};
+
+const getAddressFirstWord = (address?: string): string => {
+  if (!address) return "";
+  const beforeDash = address.split("-")[0];
+  const firstToken = beforeDash.split(/\s+/)[0];
+  return firstToken.trim();
 };
 
 const EmployeesForm: React.FC = () => {
@@ -106,7 +128,6 @@ const EmployeesForm: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Modal: Add / Edit employee
   const [openNewEmployee, setOpenNewEmployee] = useState(false);
   const [modalMode, setModalMode] = useState<"add" | "edit">("add");
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -128,6 +149,25 @@ const EmployeesForm: React.FC = () => {
   );
   const [formErrors, setFormErrors] = useState<FormErrors>({});
 
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assignEmp, setAssignEmp] = useState<Employee | null>(null);
+  const [assignCustomers, setAssignCustomers] = useState<ModalCustomer[]>([]);
+  const [assignSelected, setAssignSelected] = useState<string[]>([]);
+  const [assignLoading, setAssignLoading] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
+
+  const [assignedCustomers, setAssignedCustomers] = useState<ModalCustomer[]>(
+    []
+  );
+  const [assignedLoading, setAssignedLoading] = useState(false);
+  const [assignedError, setAssignedError] = useState<string | null>(null);
+
+  // usernames of assigned customers marked for deletion (trash icon)
+  const [toUnassign, setToUnassign] = useState<string[]>([]);
+
+  // multi-select address filter for available customers
+  const [assignAddressFilter, setAssignAddressFilter] = useState<string[]>([]);
+
   const handleOpenNew = () => {
     setModalMode("add");
     setEditingId(null);
@@ -143,7 +183,6 @@ const EmployeesForm: React.FC = () => {
     setEditingId(null);
   };
 
-  // ---- Load employees from API ----
   const loadEmployees = async () => {
     try {
       const res = await axios.get(`${API_BASE_URL}/api/employees`);
@@ -207,7 +246,6 @@ const EmployeesForm: React.FC = () => {
     });
   }, [employees, nameFilter, mobileFilter, addressFilter, order, orderBy]);
 
-  // ---- Import Excel ----
   const handleImportClick = () => {
     fileInputRef.current?.click();
   };
@@ -245,7 +283,6 @@ const EmployeesForm: React.FC = () => {
     }
   };
 
-  // ---- Export Excel ----
   const handleExportExcel = () => {
     if (!filteredAndSortedEmployees.length) return;
 
@@ -267,7 +304,6 @@ const EmployeesForm: React.FC = () => {
     XLSX.writeFile(workbook, "employees.xlsx");
   };
 
-  // ---- Validation ----
   const validateForm = (): boolean => {
     const errors: FormErrors = {};
 
@@ -289,9 +325,7 @@ const EmployeesForm: React.FC = () => {
   };
 
   const handleSaveEmployee = async () => {
-    if (!validateForm()) {
-      return;
-    }
+    if (!validateForm()) return;
 
     try {
       await saveEmployee({
@@ -315,7 +349,6 @@ const EmployeesForm: React.FC = () => {
     }
   };
 
-  // ---- Double-click row to edit ----
   const handleRowDoubleClick = (e: Employee) => {
     setModalMode("edit");
     setEditingId(e.id);
@@ -332,6 +365,169 @@ const EmployeesForm: React.FC = () => {
     });
     setFormErrors({});
     setOpenNewEmployee(true);
+  };
+
+  const handleAddCustomersClick = async (emp: Employee) => {
+    setAssignEmp(emp);
+    setAssignOpen(true);
+    setAssignCustomers([]);
+    setAssignSelected([]);
+    setAssignError(null);
+    setAssignLoading(true);
+    setAssignAddressFilter([]);
+
+    setAssignedCustomers([]);
+    setAssignedError(null);
+    setAssignedLoading(true);
+
+    setToUnassign([]);
+
+    try {
+      const [resAssigned, resAvailable] = await Promise.all([
+        axios.get(`${API_BASE_URL}/api/employees/customers-for-employee`, {
+          params: { emp_username: emp.username },
+        }),
+        axios.get(
+          `${API_BASE_URL}/api/employees/customers-not-in-relation`,
+          { params: { emp_username: emp.username } }
+        ),
+      ]);
+
+      const assignedData = resAssigned.data as any[];
+      const availableData = resAvailable.data as any[];
+
+      const mappedAssigned: ModalCustomer[] = assignedData.map((row) => ({
+        username: (row.username ?? "").toString().trim(),
+        fullname: row.fullname ?? "",
+        mobile: row.mobile ?? "",
+        address: row.customeraddress ?? row.address ?? "",
+      }));
+
+      const mappedAvailable: ModalCustomer[] = availableData.map((row) => ({
+        username: (row.username ?? "").toString().trim(),
+        fullname: row.fullname ?? "",
+        mobile: row.mobile ?? "",
+        address: row.customeraddress ?? row.address ?? "",
+      }));
+
+      setAssignedCustomers(mappedAssigned);
+      setAssignCustomers(mappedAvailable);
+    } catch (err: any) {
+      console.error("Failed to load customers for employee", err);
+      const apiError = err?.response?.data?.error;
+      setAssignError(apiError || "Failed to load customers list.");
+      setAssignedError(apiError || "Failed to load assigned customers.");
+    } finally {
+      setAssignLoading(false);
+      setAssignedLoading(false);
+    }
+  };
+
+  const handleCloseAssign = () => {
+    setAssignOpen(false);
+    setAssignEmp(null);
+    setAssignCustomers([]);
+    setAssignSelected([]);
+    setAssignError(null);
+    setAssignLoading(false);
+
+    setAssignedCustomers([]);
+    setAssignedError(null);
+    setAssignedLoading(false);
+
+    setAssignAddressFilter([]);
+    setToUnassign([]);
+  };
+
+  const toggleAssignCustomer = (username: string) => {
+    setAssignSelected((prev) =>
+      prev.includes(username)
+        ? prev.filter((u) => u !== username)
+        : [...prev, username]
+    );
+  };
+
+  const toggleUnassignCustomer = (username: string) => {
+    setToUnassign((prev) =>
+      prev.includes(username)
+        ? prev.filter((u) => u !== username)
+        : [...prev, username]
+    );
+  };
+
+  const addressOptions = useMemo(() => {
+    const s = new Set<string>();
+    assignCustomers.forEach((c) => {
+      const w = getAddressFirstWord(c.address);
+      if (w) s.add(w);
+    });
+    return Array.from(s).sort((a, b) => a.localeCompare(b, "ar"));
+  }, [assignCustomers]);
+
+  const filteredAssignCustomers = useMemo(() => {
+    if (!assignAddressFilter.length) return assignCustomers;
+
+    return assignCustomers.filter((c) => {
+      const firstWord = getAddressFirstWord(c.address).toLowerCase();
+      if (!firstWord) return false;
+      return assignAddressFilter
+        .map((w) => w.toLowerCase())
+        .includes(firstWord);
+    });
+  }, [assignCustomers, assignAddressFilter]);
+
+  const toggleAssignAll = (list: ModalCustomer[]) => {
+    if (!list.length) return;
+
+    const usernames = list.map((c) => c.username);
+    const allSelected = usernames.every((u) => assignSelected.includes(u));
+
+    if (allSelected) {
+      setAssignSelected((prev) => prev.filter((u) => !usernames.includes(u)));
+    } else {
+      setAssignSelected((prev) =>
+        Array.from(new Set([...prev, ...usernames]))
+      );
+    }
+  };
+
+  const handleConfirmAssign = async () => {
+    if (!assignEmp) return;
+
+    try {
+      // 1) Assign new relations
+      if (assignSelected.length > 0) {
+        await axios.post(`${API_BASE_URL}/api/employees/assign-customers`, {
+          emp_username: assignEmp.username,
+          cust_usernames: assignSelected,
+        });
+      }
+
+      // 2) Unassign + delete customer users fully
+      if (toUnassign.length > 0) {
+        // Remove relation from emp_cust_relation
+        await axios.post(`${API_BASE_URL}/api/employees/unassign-customers`, {
+          emp_username: assignEmp.username,
+          cust_usernames: toUnassign,
+        });
+
+        // Delete customer users (and their addresses) from DB
+        await axios.post(`${API_BASE_URL}/api/employees/delete-customers`, {
+          cust_usernames: toUnassign,
+        });
+      }
+
+      // Reload lists so dialog stays in sync
+      await handleAddCustomersClick(assignEmp);
+
+      // Clear local state
+      setAssignSelected([]);
+      setToUnassign([]);
+    } catch (err: any) {
+      console.error("Failed to save changes", err);
+      const apiError = err?.response?.data?.error;
+      setAssignError(apiError || "Failed to save changes.");
+    }
   };
 
   const renderSortableHeaderCell = (label: string, property: SortKey) => (
@@ -368,7 +564,6 @@ const EmployeesForm: React.FC = () => {
 
   return (
     <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
-      {/* Header bar */}
       <Paper
         sx={{
           p: 2,
@@ -480,7 +675,6 @@ const EmployeesForm: React.FC = () => {
         </Typography>
       )}
 
-      {/* Filter panel */}
       <Paper
         sx={{
           p: 2.5,
@@ -579,7 +773,6 @@ const EmployeesForm: React.FC = () => {
         </Stack>
       </Paper>
 
-      {/* Table */}
       <Paper
         sx={{
           borderRadius: 2,
@@ -620,12 +813,25 @@ const EmployeesForm: React.FC = () => {
                 {renderSortableHeaderCell("Building", "building")}
                 {renderSortableHeaderCell("Floor", "floor")}
                 {renderSortableHeaderCell("Type", "type")}
+                <TableCell
+                  sx={{
+                    fontFamily: tableFontFamily,
+                    fontWeight: 700,
+                    fontSize: "0.95rem",
+                    color: "#fff",
+                    whiteSpace: "nowrap",
+                    userSelect: "none",
+                    textAlign: "center",
+                  }}
+                >
+                  Add Customers
+                </TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {filteredAndSortedEmployees.length === 0 ? (
                 <TableRow tabIndex={-1}>
-                  <TableCell colSpan={9} align="center">
+                  <TableCell colSpan={10} align="center">
                     <Typography
                       variant="body2"
                       color="text.secondary"
@@ -727,6 +933,36 @@ const EmployeesForm: React.FC = () => {
                     >
                       {e.type}
                     </TableCell>
+                    <TableCell
+                      sx={{
+                        textAlign: "center",
+                      }}
+                    >
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          handleAddCustomersClick(e);
+                        }}
+                        sx={{
+                          textTransform: "none",
+                          fontFamily: tableFontFamily,
+                          fontSize: "0.8rem",
+                          borderRadius: 999,
+                          px: 2,
+                          py: 0.5,
+                          borderColor: "#00897b",
+                          color: "#00695c",
+                          "&:hover": {
+                            borderColor: "#00695c",
+                            backgroundColor: "#e0f2f1",
+                          },
+                        }}
+                      >
+                        Add Customers
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))
               )}
@@ -735,7 +971,6 @@ const EmployeesForm: React.FC = () => {
         </TableContainer>
       </Paper>
 
-      {/* Add / Edit Employee Modal */}
       <Dialog
         open={openNewEmployee}
         onClose={handleCloseNew}
@@ -937,6 +1172,486 @@ const EmployeesForm: React.FC = () => {
           >
             Save
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={assignOpen}
+        onClose={handleCloseAssign}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            p: 1,
+            bgcolor: "#f4f7f7",
+          },
+        }}
+      >
+        <DialogTitle
+          sx={{
+            fontFamily: tableFontFamily,
+            fontWeight: 700,
+            fontSize: "1.2rem",
+            pb: 1.2,
+            background:
+              "linear-gradient(90deg, #00695c 0%, #00897b 50%, #00acc1 100%)",
+            color: "white",
+            borderRadius: "12px 12px 0 0",
+          }}
+        >
+          {assignEmp
+            ? `Assign Customers to ${assignEmp.fullname}`
+            : "Assign Customers"}
+        </DialogTitle>
+
+        <DialogContent
+          sx={{
+            mt: 2,
+          }}
+        >
+          {/* Already assigned customers */}
+          <Box sx={{ mb: 3 }}>
+            <Typography
+              variant="subtitle2"
+              sx={{
+                mb: 1,
+                fontFamily: tableFontFamily,
+                fontWeight: 600,
+                color: "text.secondary",
+              }}
+            >
+              Already assigned customers
+            </Typography>
+            <Paper
+              elevation={0}
+              sx={{
+                borderRadius: 2,
+                border: "1px solid #e0e0e0",
+                overflow: "hidden",
+              }}
+            >
+              <TableContainer sx={{ maxHeight: 200 }}>
+                <Table size="small" stickyHeader>
+                  <TableHead>
+                    <TableRow
+                      sx={{
+                        "& th": {
+                          backgroundColor: "#006064",
+                          color: "#fff",
+                          fontFamily: tableFontFamily,
+                          fontWeight: 700,
+                        },
+                      }}
+                    >
+                      <TableCell>Customer Name</TableCell>
+                      <TableCell>Username</TableCell>
+                      <TableCell>Address</TableCell>
+                      <TableCell>Mobile</TableCell>
+                      <TableCell align="center">Remove</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {assignedLoading ? (
+                      <TableRow>
+                        <TableCell colSpan={5} align="center">
+                          <Typography
+                            sx={{
+                              fontFamily: tableFontFamily,
+                              fontSize: "0.9rem",
+                              color: "text.secondary",
+                            }}
+                          >
+                            Loading assigned customers...
+                          </Typography>
+                        </TableCell>
+                      </TableRow>
+                    ) : assignedCustomers.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} align="center">
+                          <Typography
+                            sx={{
+                              fontFamily: tableFontFamily,
+                              fontSize: "0.9rem",
+                              color: "text.secondary",
+                            }}
+                          >
+                            No customers assigned yet.
+                          </Typography>
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      assignedCustomers.map((c, idx) => {
+                        const markedForDelete = toUnassign.includes(
+                          c.username
+                        );
+                        return (
+                          <TableRow
+                            key={c.username}
+                            sx={{
+                              backgroundColor:
+                                idx % 2 === 0
+                                  ? "background.paper"
+                                  : "#f5f5f5",
+                              opacity: markedForDelete ? 0.6 : 1,
+                            }}
+                          >
+                            <TableCell
+                              sx={{
+                                fontFamily: tableFontFamily,
+                                fontSize: "0.9rem",
+                                fontWeight: 600,
+                                textDecoration: markedForDelete
+                                  ? "line-through"
+                                  : "none",
+                              }}
+                            >
+                              {c.fullname}
+                            </TableCell>
+                            <TableCell
+                              sx={{
+                                fontFamily: tableFontFamily,
+                                fontSize: "0.85rem",
+                                textDecoration: markedForDelete
+                                  ? "line-through"
+                                  : "none",
+                              }}
+                            >
+                              {c.username}
+                            </TableCell>
+                            <TableCell
+                              sx={{
+                                fontFamily: tableFontFamily,
+                                fontSize: "0.85rem",
+                                textDecoration: markedForDelete
+                                  ? "line-through"
+                                  : "none",
+                              }}
+                            >
+                              {c.address || ""}
+                            </TableCell>
+                            <TableCell
+                              sx={{
+                                fontFamily: tableFontFamily,
+                                fontSize: "0.85rem",
+                                textDecoration: markedForDelete
+                                  ? "line-through"
+                                  : "none",
+                              }}
+                            >
+                              {c.mobile}
+                            </TableCell>
+                            <TableCell align="center">
+                              <IconButton
+                                size="small"
+                                onClick={() =>
+                                  toggleUnassignCustomer(c.username)
+                                }
+                                sx={{
+                                  color: markedForDelete
+                                    ? "error.main"
+                                    : "text.secondary",
+                                }}
+                              >
+                                <DeleteOutlineIcon fontSize="small" />
+                              </IconButton>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })
+                    )}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Paper>
+            {assignedError && (
+              <Typography
+                color="error"
+                sx={{
+                  mt: 1,
+                  fontFamily: tableFontFamily,
+                  fontSize: "0.85rem",
+                  textAlign: "right",
+                }}
+              >
+                {assignedError}
+              </Typography>
+            )}
+          </Box>
+
+          {/* Address filter for available customers */}
+          <Box sx={{ mb: 2 }}>
+            <FormControl fullWidth size="small">
+              <InputLabel
+                sx={{
+                  fontFamily: tableFontFamily,
+                  fontSize: "0.85rem",
+                }}
+              >
+                Filter by address (first word)
+              </InputLabel>
+              <Select
+                multiple
+                value={assignAddressFilter}
+                onChange={(e) =>
+                  setAssignAddressFilter(
+                    typeof e.target.value === "string"
+                      ? e.target.value.split(",")
+                      : (e.target.value as string[])
+                  )
+                }
+                input={
+                  <OutlinedInput
+                    label="Filter by address (first word)"
+                    sx={{ fontFamily: tableFontFamily, fontSize: "0.9rem" }}
+                  />
+                }
+                renderValue={(selected) => (selected as string[]).join(", ")}
+              >
+                {addressOptions.map((option) => (
+                  <MenuItem key={option} value={option}>
+                    <Checkbox
+                      checked={assignAddressFilter.indexOf(option) > -1}
+                    />
+                    <ListItemText
+                      primary={option}
+                      primaryTypographyProps={{
+                        sx: {
+                          fontFamily: tableFontFamily,
+                          fontSize: "0.9rem",
+                        },
+                      }}
+                    />
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Box>
+
+          {/* Available customers */}
+          <Paper
+            elevation={0}
+            sx={{
+              borderRadius: 2,
+              border: "1px solid #e0e0e0",
+              overflow: "hidden",
+            }}
+          >
+            <TableContainer sx={{ maxHeight: 400 }}>
+              <Table size="small" stickyHeader>
+                <TableHead>
+                  <TableRow
+                    sx={{
+                      "& th": {
+                        backgroundColor: "#004d40",
+                        color: "#fff",
+                        fontFamily: tableFontFamily,
+                        fontWeight: 700,
+                      },
+                    }}
+                  >
+                    <TableCell padding="checkbox">
+                      <Checkbox
+                        checked={
+                          filteredAssignCustomers.length > 0 &&
+                          filteredAssignCustomers.every((c) =>
+                            assignSelected.includes(c.username)
+                          )
+                        }
+                        indeterminate={
+                          filteredAssignCustomers.length > 0 &&
+                          filteredAssignCustomers.some((c) =>
+                            assignSelected.includes(c.username)
+                          ) &&
+                          !filteredAssignCustomers.every((c) =>
+                            assignSelected.includes(c.username)
+                          )
+                        }
+                        onChange={() => toggleAssignAll(filteredAssignCustomers)}
+                        sx={{
+                          color: "#e0f2f1",
+                          "&.Mui-checked": {
+                            color: "#00e676",
+                          },
+                        }}
+                      />
+                    </TableCell>
+                    <TableCell>Customer Name</TableCell>
+                    <TableCell>Username</TableCell>
+                    <TableCell>Address</TableCell>
+                    <TableCell>Mobile</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {assignLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={5} align="center">
+                        <Typography
+                          sx={{
+                            fontFamily: tableFontFamily,
+                            fontSize: "0.9rem",
+                            color: "text.secondary",
+                          }}
+                        >
+                          Loading customers...
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                  ) : filteredAssignCustomers.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} align="center">
+                        <Typography
+                          sx={{
+                            fontFamily: tableFontFamily,
+                            fontSize: "0.9rem",
+                            color: "text.secondary",
+                          }}
+                        >
+                          No available customers to assign.
+                        </Typography>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    filteredAssignCustomers.map((c, idx) => {
+                      const checked = assignSelected.includes(c.username);
+                      return (
+                        <TableRow
+                          key={c.username}
+                          hover
+                          onClick={() => toggleAssignCustomer(c.username)}
+                          sx={{
+                            cursor: "pointer",
+                            backgroundColor:
+                              idx % 2 === 0 ? "background.paper" : "#f5f5f5",
+                            "&:hover": {
+                              backgroundColor: "#e0f2f1",
+                            },
+                          }}
+                        >
+                          <TableCell padding="checkbox">
+                            <Checkbox
+                              checked={checked}
+                              onClick={(e) => e.stopPropagation()}
+                              sx={{
+                                color: "#00acc1",
+                                "&.Mui-checked": {
+                                  color: "#00e676",
+                                },
+                              }}
+                            />
+                          </TableCell>
+                          <TableCell
+                            sx={{
+                              fontFamily: tableFontFamily,
+                              fontSize: "0.9rem",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {c.fullname}
+                          </TableCell>
+                          <TableCell
+                            sx={{
+                              fontFamily: tableFontFamily,
+                              fontSize: "0.85rem",
+                            }}
+                          >
+                            {c.username}
+                          </TableCell>
+                          <TableCell
+                            sx={{
+                              fontFamily: tableFontFamily,
+                              fontSize: "0.85rem",
+                            }}
+                          >
+                            {c.address || ""}
+                          </TableCell>
+                          <TableCell
+                            sx={{
+                              fontFamily: tableFontFamily,
+                              fontSize: "0.85rem",
+                            }}
+                          >
+                            {c.mobile}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
+
+          {assignError && (
+            <Typography
+              color="error"
+              sx={{
+                mt: 1,
+                fontFamily: tableFontFamily,
+                fontSize: "0.85rem",
+                textAlign: "right",
+              }}
+            >
+              {assignError}
+            </Typography>
+          )}
+        </DialogContent>
+
+        <DialogActions
+          sx={{
+            p: 2,
+            pt: 1,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 1,
+          }}
+        >
+          <Typography
+            sx={{
+              fontFamily: tableFontFamily,
+              fontSize: "0.8rem",
+              color: "text.secondary",
+            }}
+          >
+            {assignSelected.length} customer
+            {assignSelected.length === 1 ? "" : "s"} selected
+          </Typography>
+
+          <Box sx={{ display: "flex", gap: 1 }}>
+            <Button
+              onClick={handleCloseAssign}
+              sx={{
+                textTransform: "none",
+                fontFamily: tableFontFamily,
+                color: "#555",
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              onClick={handleConfirmAssign}
+              disabled={assignSelected.length === 0 && toUnassign.length === 0}
+              sx={{
+                textTransform: "none",
+                fontWeight: 600,
+                fontFamily: tableFontFamily,
+                bgcolor:
+                  assignSelected.length === 0 && toUnassign.length === 0
+                    ? "#9e9e9e"
+                    : "#00897b",
+                "&:hover": {
+                  bgcolor:
+                    assignSelected.length === 0 && toUnassign.length === 0
+                      ? "#9e9e9e"
+                      : "#00796b",
+                },
+              }}
+            >
+              Save Changes
+            </Button>
+          </Box>
         </DialogActions>
       </Dialog>
     </Box>

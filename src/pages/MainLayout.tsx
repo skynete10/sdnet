@@ -40,6 +40,7 @@ const MainLayout: React.FC = () => {
           <Route path="/internetmanag" element={<InternnetManagerForm />}/>
           <Route path="/services" element={<ServicesForm />}/>
           <Route path="/customerssub" element={<CustomerSubscriptionForm />}/>
+          
           {/* add more routes here later */}
         </Routes>
       </Box>
