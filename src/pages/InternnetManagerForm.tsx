@@ -96,19 +96,6 @@ const getCurrentMonthValue = (): string => {
   return `${d.getFullYear()}-${m}`;
 };
 
-const getDisplayDate = (iso?: string | null) => {
-  if (!iso) return "";
-  try {
-    const d = new Date(iso);
-    const dd = String(d.getDate()).padStart(2, "0");
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const yyyy = d.getFullYear();
-    return `${dd}/${mm}/${yyyy}`;
-  } catch {
-    return iso;
-  }
-};
-
 const getCityKey = (city: string): string => {
   if (!city) return "";
   return city.split(/[-–—]/)[0].trim();
@@ -119,7 +106,6 @@ const InternnetManagerForm: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // still used ONLY to load invoices on Apply Date
   const [draftFilterDate, setDraftFilterDate] = useState<string>(() =>
     getCurrentMonthValue()
   );
@@ -248,12 +234,20 @@ const InternnetManagerForm: React.FC = () => {
     }
   };
 
-  const loadPaymentsForUser = async (username: string) => {
+  const loadPaymentsForInvoice = async (
+    invoiceNumber: number,
+    invoiceMonth?: string
+  ) => {
     setPaymentsLoading(true);
     try {
       const res = await axios.get(
         `${API_BASE_URL}/api/internet-manager/payments`,
-        { params: { username } }
+        {
+          params: {
+            invoice_number: invoiceNumber,
+            invoice_month: invoiceMonth || undefined,
+          },
+        }
       );
       const apiData = Array.isArray(res.data) ? res.data : [];
       const mapped: PaymentRow[] = apiData.map((p: any, i: number) => ({
@@ -261,12 +255,10 @@ const InternnetManagerForm: React.FC = () => {
         payment_date:
           typeof p.payment_date === "string"
             ? p.payment_date.slice(0, 10)
-            : typeof p.date === "string"
-            ? p.date.slice(0, 10)
             : "",
         amount:
           typeof p.amount === "number" ? p.amount : Number(p.amount ?? 0),
-        method: p.method ?? p.payment_method ?? "",
+        method: p.method ?? "",
       }));
       setPayments(mapped);
     } catch {
@@ -295,7 +287,6 @@ const InternnetManagerForm: React.FC = () => {
     return Array.from(set).sort((a, b) => a.localeCompare(b, "ar"));
   }, [rows]);
 
-  // Apply Date no longer filters rows; it only reloads invoices for that month.
   const handleApplyDateFilter = async () => {
     setFilterDate(draftFilterDate);
     setSelectedIds(new Set());
@@ -323,7 +314,6 @@ const InternnetManagerForm: React.FC = () => {
     setOrderBy(property);
   };
 
-  // ✅ STOPPED filtering on due_date completely
   const filteredAndSortedRows = useMemo(() => {
     const filtered = rows.filter((row) => {
       const nameMatch =
@@ -420,74 +410,113 @@ const InternnetManagerForm: React.FC = () => {
     setNewPayDate(getCurrentDateValue());
     setNewPayMethod("cash");
 
-    if (row.username) await loadPaymentsForUser(row.username);
-    else setPayments([]);
+    const invoiceMonth =
+      filterDate || draftFilterDate || getCurrentMonthValue();
+
+    if (row.invoice_number) {
+      await loadPaymentsForInvoice(row.invoice_number, invoiceMonth);
+    } else {
+      setPayments([]);
+    }
   };
 
+  // 🔥 Auto compute Deduction = sum(payments) and Net = Amount − sum(payments)
   useEffect(() => {
-    const amt = Number(modalAmount || 0);
-    const ded = Number(modalDeduction || 0);
-    const net = Math.max(amt - ded, 0);
+    const base = Number(modalAmount || 0);
+    const totalPaid = payments.reduce(
+      (sum, p) => sum + (p.amount || 0),
+      0
+    );
+    const net = Math.max(base - totalPaid, 0);
+
+    setModalDeduction(totalPaid.toFixed(2));
     setModalNetAmount(net.toFixed(2));
-  }, [modalAmount, modalDeduction]);
-
-  const handleAppendPayment = () => {
-    const amtNum = Number(newPayAmount);
-    if (!activeRow?.username) return;
-    if (!newPayAmount.trim() || isNaN(amtNum) || amtNum <= 0) return;
-
-    const newRow: PaymentRow = {
-      id: Date.now(),
-      payment_date: newPayDate || getCurrentDateValue(),
-      amount: amtNum,
-      method: newPayMethod || "",
-    };
-
-    setPayments((prev) => [newRow, ...prev]);
-    setNewPayAmount("");
-  };
+  }, [modalAmount, payments]);
 
   const handleRemovePayment = (id: number) => {
     setPayments((prev) => prev.filter((p) => p.id !== id));
   };
 
   const handleBillingSelected = async () => {
-  const selectedRows = rows.filter((r) => selectedIds.has(r.id));
-  if (selectedRows.length === 0) return;
+    const selectedRows = rows.filter((r) => selectedIds.has(r.id));
+    if (selectedRows.length === 0) return;
 
-  // optimistic UI
-  setRows((prev) =>
-    prev.map((r) =>
-      selectedIds.has(r.id) ? { ...r, invoiced: true } : r
-    )
-  );
-
-  // payload with amount ✅
-  const items = selectedRows.map((r) => ({
-    id: r.id,
-    customer_username: r.username,
-    invoice_number: r.invoice_number ?? null,
-    amount: r.amount ?? 0,
-  }));
-
-  try {
-    await axios.post(
-      `${API_BASE_URL}/api/internet-manager/billing`,
-      { items }
+    setRows((prev) =>
+      prev.map((r) =>
+        selectedIds.has(r.id) ? { ...r, invoiced: true } : r
+      )
     );
 
-    if (filterDate) await loadInvoicesForMonth(filterDate);
-  } catch (e) {
-    // optional rollback if you want:
-    // setRows(prev => prev.map(r =>
-    //   selectedIds.has(r.id) ? { ...r, invoiced: false } : r
-    // ));
-  }
-};
+    const items = selectedRows.map((r) => ({
+      id: r.id,
+      customer_username: r.username,
+      invoice_number: r.invoice_number ?? null,
+      amount: r.amount ?? 0,
+    }));
+
+    try {
+      await axios.post(`${API_BASE_URL}/api/internet-manager/billing`, {
+        items,
+      });
+
+      if (filterDate) await loadInvoicesForMonth(filterDate);
+    } catch (e) {
+      // optional rollback if you want
+    }
+  };
+
+  const handleInvoiceRow = async (row: InternetRecord) => {
+    if (!row) return;
+
+    setRows((prev) =>
+      prev.map((r) =>
+        r.id === row.id ? { ...r, invoiced: true } : r
+      )
+    );
+
+    const items = [
+      {
+        id: row.id,
+        customer_username: row.username,
+        invoice_number: row.invoice_number ?? null,
+        amount: row.amount ?? 0,
+      },
+    ];
+
+    try {
+      await axios.post(`${API_BASE_URL}/api/internet-manager/billing`, {
+        items,
+      });
+      if (filterDate) await loadInvoicesForMonth(filterDate);
+    } catch (e) {
+      // optional rollback that single row if needed
+    }
+  };
 
   const handlePayInvoiceSelected = async () => {
-    const ids = Array.from(selectedIds);
-    if (ids.length === 0) return;
+    const selectedRows = rows.filter((r) => selectedIds.has(r.id));
+    if (selectedRows.length === 0) return;
+
+    const paymentDate = getCurrentDateValue();
+
+    const items = selectedRows
+      .filter((r) => r.invoice_number != null)
+      .map((r) => {
+        const amount = r.amount ?? 0;
+        const payment = amount;
+        const net_amount = amount - payment;
+
+        return {
+          invoice_number: r.invoice_number,
+          payment_date: paymentDate,
+          amount,
+          payment,
+          net_amount,
+          currency: "USD",
+        };
+      });
+
+    if (items.length === 0) return;
 
     setRows((prev) =>
       prev.map((r) =>
@@ -498,9 +527,51 @@ const InternnetManagerForm: React.FC = () => {
     );
 
     try {
-      await axios.post(`${API_BASE_URL}/api/internet-manager/pay-invoice`, { ids });
+      await axios.post(`${API_BASE_URL}/api/internet-manager/pay-invoice`, {
+        items,
+      });
+
       if (filterDate) await loadInvoicesForMonth(filterDate);
-    } catch {}
+    } catch (e) {
+      // optional: rollback / snackbar
+    }
+  };
+
+  const handlePayRow = async (row: InternetRecord) => {
+    if (!row.invoice_number) return;
+
+    const paymentDate = getCurrentDateValue();
+    const amount = row.amount ?? 0;
+    const payment = amount;
+    const net_amount = amount - payment;
+
+    const items = [
+      {
+        invoice_number: row.invoice_number,
+        payment_date: paymentDate,
+        amount,
+        payment,
+        net_amount,
+        currency: "USD",
+      },
+    ];
+
+    setRows((prev) =>
+      prev.map((r) =>
+        r.id === row.id
+          ? { ...r, payment: "paid", invoiced: true }
+          : r
+      )
+    );
+
+    try {
+      await axios.post(`${API_BASE_URL}/api/internet-manager/pay-invoice`, {
+        items,
+      });
+      if (filterDate) await loadInvoicesForMonth(filterDate);
+    } catch (e) {
+      // optional rollback that single row
+    }
   };
 
   const handleUndoInvoiceSelected = async () => {
@@ -512,7 +583,9 @@ const InternnetManagerForm: React.FC = () => {
     );
 
     try {
-      await axios.post(`${API_BASE_URL}/api/internet-manager/undo-invoice`, { ids });
+      await axios.post(`${API_BASE_URL}/api/internet-manager/undo-invoice`, {
+        ids,
+      });
       if (filterDate) await loadInvoicesForMonth(filterDate);
     } catch {}
   };
@@ -531,24 +604,25 @@ const InternnetManagerForm: React.FC = () => {
     setSelectedIds(new Set());
 
     try {
-      await axios.post(`${API_BASE_URL}/api/internet-manager/cancel-invoice`, { ids });
+      await axios.post(
+        `${API_BASE_URL}/api/internet-manager/cancel-invoice`,
+        { ids }
+      );
       if (filterDate) await loadInvoicesForMonth(filterDate);
     } catch {}
   };
 
   const handlePrintInvoices = () => {
-  const selectedRows = rows.filter((r) => selectedIds.has(r.id));
-  if (selectedRows.length === 0) return;
+    const selectedRows = rows.filter((r) => selectedIds.has(r.id));
+    if (selectedRows.length === 0) return;
 
-  // خزن السطور لصفحة الطباعة
-  sessionStorage.setItem(
-    "print_invoices_rows",
-    JSON.stringify(selectedRows)
-  );
+    sessionStorage.setItem(
+      "print_invoices_rows",
+      JSON.stringify(selectedRows)
+    );
 
-  // افتح صفحة الطباعة بتاب جديد
-  window.open("/print-invoices", "_blank");
-};
+    window.open("/print-invoices", "_blank");
+  };
 
   const renderSortableHeaderCell = (
     label: string,
@@ -588,6 +662,43 @@ const InternnetManagerForm: React.FC = () => {
     () => rows.some((r) => selectedIds.has(r.id) && r.invoiced),
     [rows, selectedIds]
   );
+
+  const handleAppendPayment = async () => {
+    const amtNum = Number(newPayAmount);
+    if (!activeRow?.invoice_number) return;
+    if (!newPayAmount.trim() || isNaN(amtNum) || amtNum <= 0) return;
+
+    const invoiceAmount = Number(modalAmount || 0);
+    const payment = amtNum;
+    const net_amount = Math.max(invoiceAmount - payment, 0);
+    const paymentDate = newPayDate || getCurrentDateValue();
+
+    const items = [
+      {
+        invoice_number: activeRow.invoice_number,
+        payment_date: paymentDate,
+        amount: invoiceAmount,
+        payment,
+        net_amount,
+        currency: "USD",
+      },
+    ];
+
+    try {
+      await axios.post(`${API_BASE_URL}/api/internet-manager/pay-invoice`, {
+        items,
+      });
+
+      const invoiceMonth =
+        filterDate || draftFilterDate || getCurrentMonthValue();
+      await loadPaymentsForInvoice(activeRow.invoice_number, invoiceMonth);
+
+      setNewPayAmount("");
+      // modalDeduction & modalNetAmount are recalculated by useEffect from payments
+    } catch (e) {
+      // optional error handling
+    }
+  };
 
   return (
     <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
@@ -657,7 +768,6 @@ const InternnetManagerForm: React.FC = () => {
         </Typography>
       )}
 
-      {/* Month picker ONLY for loading invoices */}
       <Paper
         sx={{
           p: 2.5,
@@ -682,7 +792,8 @@ const InternnetManagerForm: React.FC = () => {
               Load Invoices by Month
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              This does not filter rows — it only updates invoiced status / numbers.
+              This does not filter rows — it only updates invoiced status /
+              numbers.
             </Typography>
           </Box>
 
@@ -1095,14 +1206,44 @@ const InternnetManagerForm: React.FC = () => {
                   Invoiced
                 </TableCell>
 
-                {renderSortableHeaderCell("Invoice No", "invoice_number", "right")}
+                <TableCell
+                  sx={{
+                    fontWeight: 700,
+                    fontSize: "0.95rem",
+                    color: "#fff",
+                    whiteSpace: "nowrap",
+                    backgroundColor: "#004d40",
+                    textAlign: "center",
+                  }}
+                >
+                  Invoice
+                </TableCell>
+
+                <TableCell
+                  sx={{
+                    fontWeight: 700,
+                    fontSize: "0.95rem",
+                    color: "#fff",
+                    whiteSpace: "nowrap",
+                    backgroundColor: "#004d40",
+                    textAlign: "center",
+                  }}
+                >
+                  Pay
+                </TableCell>
+
+                {renderSortableHeaderCell(
+                  "Invoice No",
+                  "invoice_number",
+                  "right"
+                )}
               </TableRow>
             </TableHead>
 
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={12} align="center">
+                  <TableCell colSpan={14} align="center">
                     <Typography variant="body2" color="text.secondary">
                       Loading...
                     </Typography>
@@ -1110,7 +1251,7 @@ const InternnetManagerForm: React.FC = () => {
                 </TableRow>
               ) : filteredAndSortedRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={12} align="center">
+                  <TableCell colSpan={14} align="center">
                     <Typography variant="body2" color="text.secondary">
                       No records found.
                     </Typography>
@@ -1180,6 +1321,46 @@ const InternnetManagerForm: React.FC = () => {
                         {row.invoiced ? "Yes" : "No"}
                       </TableCell>
 
+                      <TableCell>
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleInvoiceRow(row);
+                          }}
+                          disabled={row.invoiced}
+                          sx={{
+                            textTransform: "none",
+                            fontSize: "0.75rem",
+                            px: 1.5,
+                          }}
+                        >
+                          Invoice
+                        </Button>
+                      </TableCell>
+
+                      <TableCell>
+                        <Button
+                          variant="contained"
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handlePayRow(row);
+                          }}
+                          disabled={!row.invoice_number || row.payment === "paid"}
+                          sx={{
+                            textTransform: "none",
+                            fontSize: "0.75rem",
+                            px: 1.5,
+                            bgcolor: "#16a34a",
+                            "&:hover": { bgcolor: "#15803d" },
+                          }}
+                        >
+                          Pay
+                        </Button>
+                      </TableCell>
+
                       <TableCell align="right">
                         {row.invoice_number ?? ""}
                       </TableCell>
@@ -1219,7 +1400,9 @@ const InternnetManagerForm: React.FC = () => {
           }}
         >
           {activeRow
-            ? `${activeRow.fullname} (${activeRow.username})`
+            ? `${activeRow.fullname} (${activeRow.username}) - Invoice: ${
+                activeRow.invoice_number ?? "N/A"
+              }`
             : "Payments"}
         </DialogTitle>
 
@@ -1269,7 +1452,7 @@ const InternnetManagerForm: React.FC = () => {
                   fullWidth
                   type="number"
                   value={modalDeduction}
-                  onChange={(e) => setModalDeduction(e.target.value)}
+                  disabled
                   InputProps={{
                     endAdornment: (
                       <InputAdornment position="end">USD</InputAdornment>
