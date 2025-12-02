@@ -15,9 +15,17 @@ import {
   TableSortLabel,
   Divider,
   InputAdornment,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  MenuItem,
+  IconButton,
+  Tooltip,
 } from "@mui/material";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import DownloadIcon from "@mui/icons-material/Download";
+import DeleteIcon from "@mui/icons-material/Delete";
 import axios from "axios";
 import * as XLSX from "xlsx";
 
@@ -26,10 +34,11 @@ const API_BASE_URL = "http://127.0.0.1:5100";
 // ⚠️ Replace with your real USD↔LBP rate or pass as prop
 const USD_RATE = 90000;
 
+type Currency = "USD" | "LBP";
+
 // Safely read env and map to Currency with fallback
 const getCurrencyEnv = (key: string, fallback: Currency): Currency => {
   try {
-    // typeof process protects you if process is not defined (e.g. Vite)
     const val =
       typeof process !== "undefined" && process.env
         ? process.env[key]
@@ -44,8 +53,6 @@ const getCurrencyEnv = (key: string, fallback: Currency): Currency => {
   }
 };
 
-type Currency = "USD" | "LBP";
-
 type Employee = {
   id: number;
   fullname: string;
@@ -59,7 +66,7 @@ type Employee = {
   type: string;
 
   salary_amount?: number;
-  payment_method?: string; // still used for display only
+  payment_method?: string;
   net_amount?: number;
   currency?: Currency;
 };
@@ -79,7 +86,6 @@ const tableFontFamily =
 // Base currencies from .env
 const CURR_BASE1: Currency = getCurrencyEnv("REACT_APP_CURR_BASE1", "USD");
 const CURR_BASE2: Currency = getCurrencyEnv("REACT_APP_CURR_BASE2", "LBP");
-
 
 // helper: default YYYY-MM
 const getCurrentMonthYYYYMM = () => {
@@ -102,6 +108,16 @@ const convertAmount = (
   return amount;
 };
 
+// Extra rows added via dialog
+type ExtraSalaryRow = {
+  id: number;
+  employeeId: number;
+  amount: number;
+  netAmount: number;
+  currency: Currency;
+  date: string;
+};
+
 const EmployeeSalaryForm: React.FC = () => {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [nameFilter, setNameFilter] = useState("");
@@ -121,12 +137,26 @@ const EmployeeSalaryForm: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Extra child rows per employee (UI only)
+  const [extraRows, setExtraRows] = useState<
+    Record<number, ExtraSalaryRow[]>
+  >({});
+
+  // Dialog for adding extra salary row
+  const [openDialog, setOpenDialog] = useState(false);
+  const [dialogEmployee, setDialogEmployee] = useState<Employee | null>(null);
+  const [dialogAmount, setDialogAmount] = useState<string>("");
+  const [dialogNet, setDialogNet] = useState<string>("");
+  const [dialogDate, setDialogDate] = useState<string>(
+    new Date().toISOString().slice(0, 10)
+  );
+  const [dialogCurrency, setDialogCurrency] = useState<Currency>(CURR_BASE1);
+
   // ---- Load employees (with salary info) from API ----
   const loadEmployees = async (monthYYYYMM?: string) => {
     try {
       const params: Record<string, string> = {};
 
-      // Send selected month as YYYY-MM-01
       if (monthYYYYMM) {
         params.salary_month = `${monthYYYYMM}-01`;
       }
@@ -230,7 +260,7 @@ const EmployeeSalaryForm: React.FC = () => {
     setError(null);
 
     const monthYYYYMM = salaryMonthFilter || getCurrentMonthYYYYMM();
-    const salaryMonthDate = `${monthYYYYMM}-01`; // YYYY-MM-01
+    const salaryMonthDate = `${monthYYYYMM}-01`;
 
     const payload = {
       employee_username: emp.username,
@@ -268,7 +298,6 @@ const EmployeeSalaryForm: React.FC = () => {
   // On blur / Enter: save salary and update net_amount as well
   const handleSalaryFieldBlur = async (emp: Employee, value: string) => {
     if (value === "") {
-      // allow empty, but don't save as numeric
       return;
     }
     const num = Number(value);
@@ -277,7 +306,6 @@ const EmployeeSalaryForm: React.FC = () => {
       return;
     }
 
-    // Update local state for both salary and net
     setEmployees((prev) =>
       prev.map((e) =>
         e.id === emp.id
@@ -290,10 +318,7 @@ const EmployeeSalaryForm: React.FC = () => {
       )
     );
 
-    // Save salary_amount
     await saveSalaryField(emp, "salary_amount", value);
-
-    // Save net_amount too
     await saveSalaryField(emp, "net_amount", value);
   };
 
@@ -313,7 +338,6 @@ const EmployeeSalaryForm: React.FC = () => {
       );
     }
 
-    // Update UI immediately
     setEmployees((prev) =>
       prev.map((e) =>
         e.id === emp.id
@@ -321,7 +345,6 @@ const EmployeeSalaryForm: React.FC = () => {
               ...e,
               currency: targetCurrency,
               salary_amount: newAmount,
-              // Also convert net_amount if present
               net_amount:
                 e.net_amount != null
                   ? convertAmount(e.net_amount, currentCurrency, targetCurrency)
@@ -331,14 +354,125 @@ const EmployeeSalaryForm: React.FC = () => {
       )
     );
 
-    // Save currency
     await saveSalaryField(emp, "currency", targetCurrency);
 
-    // Save converted amount if exists
     if (newAmount != null) {
       await saveSalaryField(emp, "salary_amount", newAmount.toString());
       await saveSalaryField(emp, "net_amount", newAmount.toString());
     }
+  };
+
+  // ---- Double click row: open dialog to add extra row ----
+  const handleRowDoubleClick = (emp: Employee) => {
+    setDialogEmployee(emp);
+    const defaultAmount = emp.salary_amount ?? 0;
+    const defaultNet = emp.net_amount ?? defaultAmount;
+
+    setDialogAmount(defaultAmount ? defaultAmount.toString() : "");
+    setDialogNet(defaultNet ? defaultNet.toString() : "");
+    setDialogDate(new Date().toISOString().slice(0, 10));
+    setDialogCurrency(emp.currency ?? CURR_BASE1);
+    setOpenDialog(true);
+  };
+
+  const handleDialogAmountChange = (value: string) => {
+    // Amount change also updates net amount
+    setDialogAmount(value);
+    if (value === "") {
+      setDialogNet("");
+      return;
+    }
+    const num = Number(value);
+    if (!Number.isNaN(num)) {
+      setDialogNet(value); // net = amount (simple 1:1)
+    }
+  };
+
+  const handleDialogAdd = () => {
+    if (!dialogEmployee) return;
+
+    const amountNum = Number(dialogAmount);
+    const netNum = Number(dialogNet);
+
+    if (Number.isNaN(amountNum) || Number.isNaN(netNum)) {
+      setError("Amount and net salary must be valid numbers.");
+      return;
+    }
+
+    const empId = dialogEmployee.id;
+
+    // Create extra child row (stored in its own currency)
+    const row: ExtraSalaryRow = {
+      id: Date.now(),
+      employeeId: empId,
+      amount: amountNum,
+      netAmount: netNum,
+      currency: dialogCurrency,
+      date: dialogDate,
+    };
+
+    setExtraRows((prev) => ({
+      ...prev,
+      [empId]: [...(prev[empId] || []), row],
+    }));
+
+    // ---- Update net amount in primary row ----
+    const baseCurrency: Currency =
+      dialogEmployee.currency ?? CURR_BASE1;
+
+    const netInBase = convertAmount(netNum, dialogCurrency, baseCurrency);
+
+    setEmployees((prev) =>
+      prev.map((e) =>
+        e.id === empId
+          ? {
+              ...e,
+              net_amount: (e.net_amount ?? 0) + netInBase,
+            }
+          : e
+      )
+    );
+
+    setOpenDialog(false);
+  };
+
+  const handleDialogClose = () => {
+    setOpenDialog(false);
+  };
+
+  // ---- Delete extra row ----
+  const handleDeleteExtraRow = (empId: number, rowId: number) => {
+    setExtraRows((prev) => {
+      const rows = prev[empId] || [];
+      const rowToDelete = rows.find((r) => r.id === rowId);
+      if (!rowToDelete) return prev;
+
+      const updatedRows = rows.filter((r) => r.id !== rowId);
+
+      // Adjust primary net_amount by subtracting this extra's net in base currency
+      setEmployees((prevEmps) =>
+        prevEmps.map((e) => {
+          if (e.id !== empId) return e;
+
+          const baseCurrency: Currency = e.currency ?? CURR_BASE1;
+          const netInBase = convertAmount(
+            rowToDelete.netAmount,
+            rowToDelete.currency,
+            baseCurrency
+          );
+
+          return {
+            ...e,
+            net_amount: (e.net_amount ?? 0) - netInBase,
+          };
+        })
+      );
+
+      return {
+        ...prev,
+        [empId]: updatedRows,
+      };
+    });
   };
 
   // ---- Import Excel ----
@@ -388,19 +522,11 @@ const EmployeeSalaryForm: React.FC = () => {
 
       const netBase1 =
         e.net_amount != null
-          ? convertAmount(
-              e.net_amount,
-              baseCurrency,
-              CURR_BASE1
-            )
+          ? convertAmount(e.net_amount, baseCurrency, CURR_BASE1)
           : null;
       const netBase2 =
         e.net_amount != null
-          ? convertAmount(
-              e.net_amount,
-              baseCurrency,
-              CURR_BASE2
-            )
+          ? convertAmount(e.net_amount, baseCurrency, CURR_BASE2)
           : null;
 
       return {
@@ -752,132 +878,227 @@ const EmployeeSalaryForm: React.FC = () => {
                         )
                       : null;
 
+                  const childRows = extraRows[e.id] || [];
+
                   return (
-                    <TableRow
-                      key={e.id}
-                      tabIndex={-1}
-                      hover
-                      sx={{
-                        backgroundColor:
-                          index % 2 === 0 ? "background.paper" : "#f5f5f5",
-                        "&:hover": {
-                          backgroundColor: "#e0f2f1",
-                        },
-                        "&:focus": {
-                          outline: "none",
-                        },
-                        cursor: "default",
-                      }}
-                    >
-                      <TableCell
+                    <React.Fragment key={e.id}>
+                      <TableRow
+                        tabIndex={-1}
+                        hover
+                        onDoubleClick={() => handleRowDoubleClick(e)}
                         sx={{
-                          fontSize: "0.9rem",
-                          fontWeight: 500,
+                          backgroundColor:
+                            index % 2 === 0
+                              ? "background.paper"
+                              : "#f5f5f5",
+                          "&:hover": {
+                            backgroundColor: "#e0f2f1",
+                          },
+                          "&:focus": {
+                            outline: "none",
+                          },
+                          cursor: "pointer",
                         }}
                       >
-                        {e.username}
-                      </TableCell>
-                      <TableCell
-                        sx={{
-                          fontSize: "0.9rem",
-                          fontWeight: 600,
-                        }}
-                      >
-                        {e.fullname}
-                      </TableCell>
+                        <TableCell
+                          sx={{
+                            fontSize: "0.9rem",
+                            fontWeight: 500,
+                          }}
+                        >
+                          {e.username}
+                        </TableCell>
+                        <TableCell
+                          sx={{
+                            fontSize: "0.9rem",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {e.fullname}
+                        </TableCell>
 
-                      {/* Editable salary_amount + USD/LBP switch */}
-                      <TableCell
-                        sx={{
-                          fontSize: "0.9rem",
-                          fontWeight: 500,
-                        }}
-                      >
-                        <TextField
-                          variant="outlined"
-                          size="small"
-                          type="number"
-                          value={
-                            e.salary_amount != null
-                              ? e.salary_amount.toString()
-                              : ""
-                          }
-                          onChange={(ev) =>
-                            handleSalaryFieldChange(e.id, ev.target.value)
-                          }
-                          onBlur={(ev) =>
-                            handleSalaryFieldBlur(e, ev.target.value)
-                          }
-                          onKeyDown={(ev) => {
-                            if (ev.key === "Enter") {
-                              ev.preventDefault(); // stop form submit / row jump
-                              const value = (ev.target as HTMLInputElement)
-                                .value;
-                              handleSalaryFieldBlur(e, value);
+                        {/* Editable salary_amount + USD/LBP switch */}
+                        <TableCell
+                          sx={{
+                            fontSize: "0.9rem",
+                            fontWeight: 500,
+                          }}
+                        >
+                          <TextField
+                            variant="outlined"
+                            size="small"
+                            type="number"
+                            value={
+                              e.salary_amount != null
+                                ? e.salary_amount.toString()
+                                : ""
                             }
+                            onChange={(ev) =>
+                              handleSalaryFieldChange(e.id, ev.target.value)
+                            }
+                            onBlur={(ev) =>
+                              handleSalaryFieldBlur(e, ev.target.value)
+                            }
+                            onKeyDown={(ev) => {
+                              if (ev.key === "Enter") {
+                                ev.preventDefault();
+                                const value = (ev.target as HTMLInputElement)
+                                  .value;
+                                handleSalaryFieldBlur(e, value);
+                              }
+                            }}
+                            InputProps={{
+                              endAdornment: (
+                                <InputAdornment position="end">
+                                  <Button
+                                    size="small"
+                                    variant="outlined"
+                                    sx={{
+                                      ml: 1,
+                                      textTransform: "none",
+                                      borderRadius: 2,
+                                      px: 1.5,
+                                      py: 0.2,
+                                      fontSize: "0.75rem",
+                                      borderColor: "#009688",
+                                      color: "#00695c",
+                                    }}
+                                    onClick={() => handleToggleCurrency(e)}
+                                  >
+                                    {/* show CURRENT currency */}
+                                    {e.currency ?? "LBP"}
+                                  </Button>
+                                </InputAdornment>
+                              ),
+                              style: {
+                                fontFamily: tableFontFamily,
+                                fontSize: "0.85rem",
+                                textAlign: "right",
+                              },
+                            }}
+                          />
+                        </TableCell>
+
+                        {/* READ-ONLY payment_method */}
+                        <TableCell
+                          sx={{
+                            fontSize: "0.9rem",
+                            fontWeight: 500,
+                            textTransform: "capitalize",
                           }}
-                          InputProps={{
-                            endAdornment: (
-                              <InputAdornment position="end">
-                                <Button
+                        >
+                          {e.payment_method ?? ""}
+                        </TableCell>
+
+                        {/* READ-ONLY net_amount in CURR_BASE1 */}
+                        <TableCell
+                          sx={{
+                            fontSize: "0.9rem",
+                            fontWeight: 500,
+                          }}
+                        >
+                          {netBase1 != null ? netBase1.toFixed(2) : ""}
+                        </TableCell>
+
+                        {/* READ-ONLY net_amount in CURR_BASE2 */}
+                        <TableCell
+                          sx={{
+                            fontSize: "0.9rem",
+                            fontWeight: 500,
+                          }}
+                        >
+                          {netBase2 != null ? netBase2.toFixed(2) : ""}
+                        </TableCell>
+                      </TableRow>
+
+                      {/* Extra rows added via dialog */}
+                      {childRows.map((r) => {
+                        const childBase = r.currency;
+                        const childNetBase1 = convertAmount(
+                          r.netAmount,
+                          childBase,
+                          CURR_BASE1
+                        );
+                        const childNetBase2 = convertAmount(
+                          r.netAmount,
+                          childBase,
+                          CURR_BASE2
+                        );
+
+                        return (
+                          <TableRow
+                            key={`${e.id}-extra-${r.id}`}
+                            tabIndex={-1}
+                            sx={{
+                              backgroundColor: "#fffde7",
+                              "&:hover": {
+                                backgroundColor: "#fff9c4",
+                              },
+                            }}
+                          >
+                            <TableCell
+                              sx={{
+                                fontSize: "0.85rem",
+                                fontStyle: "italic",
+                              }}
+                            >
+                              ↳ {e.username}
+                            </TableCell>
+                            <TableCell
+                              sx={{
+                                fontSize: "0.85rem",
+                                fontStyle: "italic",
+                              }}
+                            >
+                              Extra salary ({r.date})
+                            </TableCell>
+                            <TableCell
+                              sx={{
+                                fontSize: "0.85rem",
+                              }}
+                            >
+                              {r.amount.toFixed(2)} {r.currency}
+                            </TableCell>
+                            <TableCell
+                              sx={{
+                                fontSize: "0.85rem",
+                                fontStyle: "italic",
+                              }}
+                            >
+                              Extra
+                            </TableCell>
+                            <TableCell
+                              sx={{
+                                fontSize: "0.85rem",
+                              }}
+                            >
+                              {childNetBase1.toFixed(2)}
+                            </TableCell>
+                            <TableCell
+                              sx={{
+                                fontSize: "0.85rem",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                gap: 1,
+                              }}
+                            >
+                              <span>{childNetBase2.toFixed(2)}</span>
+                              <Tooltip title="Delete extra row">
+                                <IconButton
                                   size="small"
-                                  variant="outlined"
-                                  sx={{
-                                    ml: 1,
-                                    textTransform: "none",
-                                    borderRadius: 2,
-                                    px: 1.5,
-                                    py: 0.2,
-                                    fontSize: "0.75rem",
-                                    borderColor: "#009688",
-                                    color: "#00695c",
-                                  }}
-                                  onClick={() => handleToggleCurrency(e)}
+                                  onClick={() =>
+                                    handleDeleteExtraRow(e.id, r.id)
+                                  }
                                 >
-                                  {e.currency === "USD" ? "LBP" : "USD"}
-                                </Button>
-                              </InputAdornment>
-                            ),
-                            style: {
-                              fontFamily: tableFontFamily,
-                              fontSize: "0.85rem",
-                              textAlign: "right",
-                            },
-                          }}
-                        />
-                      </TableCell>
-
-                      {/* READ-ONLY payment_method */}
-                      <TableCell
-                        sx={{
-                          fontSize: "0.9rem",
-                          fontWeight: 500,
-                          textTransform: "capitalize",
-                        }}
-                      >
-                        {e.payment_method ?? ""}
-                      </TableCell>
-
-                      {/* READ-ONLY net_amount in CURR_BASE1 */}
-                      <TableCell
-                        sx={{
-                          fontSize: "0.9rem",
-                          fontWeight: 500,
-                        }}
-                      >
-                        {netBase1 != null ? netBase1.toFixed(2) : ""}
-                      </TableCell>
-
-                      {/* READ-ONLY net_amount in CURR_BASE2 */}
-                      <TableCell
-                        sx={{
-                          fontSize: "0.9rem",
-                          fontWeight: 500,
-                        }}
-                      >
-                        {netBase2 != null ? netBase2.toFixed(2) : ""}
-                      </TableCell>
-                    </TableRow>
+                                  <DeleteIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </React.Fragment>
                   );
                 })
               )}
@@ -885,6 +1106,149 @@ const EmployeeSalaryForm: React.FC = () => {
           </Table>
         </TableContainer>
       </Paper>
+
+      {/* Dialog to add extra row */}
+      <Dialog
+        open={openDialog}
+        onClose={handleDialogClose}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            p: 1,
+            bgcolor: "#fafafa",
+          },
+        }}
+      >
+        <DialogTitle
+          sx={{
+            fontFamily: tableFontFamily,
+            fontWeight: 700,
+            fontSize: "1.2rem",
+            pb: 1.5,
+          }}
+        >
+          Add Salary Entry
+        </DialogTitle>
+        <DialogContent sx={{ mt: 1 }}>
+          <Stack spacing={2}>
+            <Typography
+              variant="body2"
+              sx={{
+                fontFamily: tableFontFamily,
+                mb: 1,
+              }}
+            >
+              {dialogEmployee
+                ? `Employee: ${dialogEmployee.fullname} (${dialogEmployee.username})`
+                : ""}
+            </Typography>
+
+            <TextField
+              label="Amount"
+              type="number"
+              size="small"
+              fullWidth
+              value={dialogAmount}
+              onChange={(e) => handleDialogAmountChange(e.target.value)}
+              InputProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                },
+              }}
+              InputLabelProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                },
+              }}
+            />
+
+            <TextField
+              label="Net Salary"
+              type="number"
+              size="small"
+              fullWidth
+              value={dialogNet}
+              onChange={(e) => setDialogNet(e.target.value)}
+              InputProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                },
+              }}
+              InputLabelProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                },
+              }}
+            />
+
+            <TextField
+              label="Currency"
+              select
+              size="small"
+              fullWidth
+              value={dialogCurrency}
+              onChange={(e) => setDialogCurrency(e.target.value as Currency)}
+              InputProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                },
+              }}
+              InputLabelProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                },
+              }}
+            >
+              <MenuItem value="USD">USD</MenuItem>
+              <MenuItem value="LBP">LBP</MenuItem>
+            </TextField>
+
+            <TextField
+              label="Date"
+              type="date"
+              size="small"
+              fullWidth
+              value={dialogDate}
+              onChange={(e) => setDialogDate(e.target.value)}
+              InputLabelProps={{
+                shrink: true,
+                sx: {
+                  fontFamily: tableFontFamily,
+                },
+              }}
+              InputProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                },
+              }}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button
+            onClick={handleDialogClose}
+            sx={{
+              textTransform: "none",
+              fontFamily: tableFontFamily,
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleDialogAdd}
+            sx={{
+              textTransform: "none",
+              fontFamily: tableFontFamily,
+              fontWeight: 600,
+            }}
+          >
+            Add
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

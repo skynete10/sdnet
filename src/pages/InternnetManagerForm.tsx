@@ -56,6 +56,9 @@ type InternetRecord = {
   invoice_number?: number | null;
   payment: "paid" | "unpaid" | "partial";
   status: "active" | "stopped";
+  // 0 => disabled customer, 1 => normal
+  customer_status: 0 | 1;
+  wish: 0 | 1;
 };
 
 type InvoiceRow = {
@@ -70,6 +73,8 @@ type PaymentRow = {
   amount: number;
   method: string;
 };
+
+const getDisabledRowColor = () => "#b71c1c"; 
 
 type Order = "asc" | "desc";
 type SortKey =
@@ -99,6 +104,19 @@ const getCurrentMonthValue = (): string => {
 const getCityKey = (city: string): string => {
   if (!city) return "";
   return city.split(/[-–—]/)[0].trim();
+};
+
+// 🌈 row background color by payment status
+const getPaymentRowColor = (payment: InternetRecord["payment"]) => {
+  switch (payment) {
+    case "paid":
+      return "#e8f5e9"; // light green
+    case "partial":
+      return "#fffde7"; // light yellow
+    case "unpaid":
+    default:
+      return "#ffebee"; // light red
+  }
 };
 
 const InternnetManagerForm: React.FC = () => {
@@ -165,29 +183,39 @@ const InternnetManagerForm: React.FC = () => {
       const apiData = Array.isArray(res.data) ? res.data : [];
 
       const mapped: InternetRecord[] = apiData.map((r: any) => {
-        const due =
-          r?.due_date && typeof r.due_date === "string"
-            ? r.due_date.slice(0, 10)
-            : null;
+  const due =
+    r?.due_date && typeof r.due_date === "string"
+      ? r.due_date.slice(0, 10)
+      : null;
 
         return {
-          id: Number(r.id),
-          username: r.username ?? "",
-          fullname: r.fullname ?? "",
-          city: r.city ?? "",
-          village: r.village ?? "",
-          due_date: due,
-          amount:
-            typeof r.amount === "number" ? r.amount : Number(r.amount ?? 0),
-          invoiced: Boolean(r.invoiced),
-          payment:
-            r.payment === "paid" || r.payment === "partial"
-              ? r.payment
-              : "unpaid",
-          status: r.status === "stopped" ? "stopped" : "active",
-          invoice_number: r.invoice_number ?? null,
-        };
-      });
+    id: Number(r.id),
+    username: r.username ?? "",
+    fullname: r.fullname ?? "",
+    city: r.city ?? "",
+    village: r.village ?? "",
+    due_date: due,
+    amount:
+      typeof r.amount === "number" ? r.amount : Number(r.amount ?? 0),
+    invoiced: Boolean(r.invoiced),
+    payment:
+      r.payment === "paid" || r.payment === "partial"
+        ? r.payment
+        : "unpaid",
+    status: r.status === "stopped" ? "stopped" : "active",
+    invoice_number: r.invoice_number ?? null,
+    customer_status:
+      typeof r.customer_status === "number"
+        ? (r.customer_status as 0 | 1)
+        : ((Number(r.customer_status ?? 1) || 1) as 0 | 1),
+
+    // 🔹 NEW: normalize wish to 0 | 1
+    wish:
+      typeof r.wish === "number"
+        ? ((r.wish ? 1 : 0) as 0 | 1)
+        : ((Number(r.wish ?? 0) ? 1 : 0) as 0 | 1),
+  };
+});
 
       const merged = invMap ? mergeInvoicesIntoRows(mapped, invMap) : mapped;
 
@@ -201,6 +229,11 @@ const InternnetManagerForm: React.FC = () => {
       setLoading(false);
     }
   };
+
+  const isNetZero = useMemo(
+    () => Number(modalNetAmount || "0") <= 0,
+    [modalNetAmount]
+  );
 
   const loadInvoicesForMonth = async (month: string) => {
     if (!month) {
@@ -374,7 +407,11 @@ const InternnetManagerForm: React.FC = () => {
     orderBy,
   ]);
 
-  const visibleIds = filteredAndSortedRows.map((r) => r.id);
+  // Only selectable IDs (exclude disabled customers)
+  const visibleIds = filteredAndSortedRows
+    .filter((r) => r.customer_status !== 0)
+    .map((r) => r.id);
+
   const allVisibleSelected =
     visibleIds.length > 0 &&
     visibleIds.every((id) => selectedIds.has(id));
@@ -400,6 +437,8 @@ const InternnetManagerForm: React.FC = () => {
   };
 
   const handleRowDoubleClick = async (row: InternetRecord) => {
+    if (row.customer_status === 0) return;
+
     setActiveRow(row);
     setModalAmount(row.amount.toString());
     setModalDeduction("0");
@@ -420,7 +459,7 @@ const InternnetManagerForm: React.FC = () => {
     }
   };
 
-  // 🔥 Auto compute Deduction = sum(payments) and Net = Amount − sum(payments)
+  // Auto compute Deduction = sum(payments) and Net = Amount − sum(payments)
   useEffect(() => {
     const base = Number(modalAmount || 0);
     const totalPaid = payments.reduce(
@@ -433,17 +472,33 @@ const InternnetManagerForm: React.FC = () => {
     setModalNetAmount(net.toFixed(2));
   }, [modalAmount, payments]);
 
-  const handleRemovePayment = (id: number) => {
-    setPayments((prev) => prev.filter((p) => p.id !== id));
+  const handleRemovePayment = async (id: number) => {
+    if (!activeRow?.invoice_number) return;
+
+    try {
+      await axios.delete(
+        `${API_BASE_URL}/api/internet-manager/payments/${id}`
+      );
+
+      const invoiceMonth =
+        filterDate || draftFilterDate || getCurrentMonthValue();
+      await loadPaymentsForInvoice(activeRow.invoice_number, invoiceMonth);
+    } catch (e) {
+      console.error("Failed to delete payment", e);
+    }
   };
 
   const handleBillingSelected = async () => {
-    const selectedRows = rows.filter((r) => selectedIds.has(r.id));
+    const selectedRows = rows.filter(
+      (r) => selectedIds.has(r.id) && r.customer_status !== 0
+    );
     if (selectedRows.length === 0) return;
 
     setRows((prev) =>
       prev.map((r) =>
-        selectedIds.has(r.id) ? { ...r, invoiced: true } : r
+        selectedIds.has(r.id) && r.customer_status !== 0
+          ? { ...r, invoiced: true }
+          : r
       )
     );
 
@@ -466,7 +521,7 @@ const InternnetManagerForm: React.FC = () => {
   };
 
   const handleInvoiceRow = async (row: InternetRecord) => {
-    if (!row) return;
+    if (!row || row.customer_status === 0) return;
 
     setRows((prev) =>
       prev.map((r) =>
@@ -494,7 +549,9 @@ const InternnetManagerForm: React.FC = () => {
   };
 
   const handlePayInvoiceSelected = async () => {
-    const selectedRows = rows.filter((r) => selectedIds.has(r.id));
+    const selectedRows = rows.filter(
+      (r) => selectedIds.has(r.id) && r.customer_status !== 0
+    );
     if (selectedRows.length === 0) return;
 
     const paymentDate = getCurrentDateValue();
@@ -520,7 +577,7 @@ const InternnetManagerForm: React.FC = () => {
 
     setRows((prev) =>
       prev.map((r) =>
-        selectedIds.has(r.id)
+        selectedIds.has(r.id) && r.customer_status !== 0
           ? { ...r, payment: "paid", invoiced: true }
           : r
       )
@@ -538,7 +595,7 @@ const InternnetManagerForm: React.FC = () => {
   };
 
   const handlePayRow = async (row: InternetRecord) => {
-    if (!row.invoice_number) return;
+    if (!row.invoice_number || row.customer_status === 0) return;
 
     const paymentDate = getCurrentDateValue();
     const amount = row.amount ?? 0;
@@ -575,11 +632,16 @@ const InternnetManagerForm: React.FC = () => {
   };
 
   const handleUndoInvoiceSelected = async () => {
-    const ids = Array.from(selectedIds);
+    const ids = rows
+      .filter((r) => selectedIds.has(r.id) && r.customer_status !== 0)
+      .map((r) => r.id);
+
     if (ids.length === 0) return;
 
     setRows((prev) =>
-      prev.map((r) => (selectedIds.has(r.id) ? { ...r, invoiced: false } : r))
+      prev.map((r) =>
+        ids.includes(r.id) ? { ...r, invoiced: false } : r
+      )
     );
 
     try {
@@ -591,12 +653,15 @@ const InternnetManagerForm: React.FC = () => {
   };
 
   const handleCancelInvoiceSelected = async () => {
-    const ids = Array.from(selectedIds);
+    const ids = rows
+      .filter((r) => selectedIds.has(r.id) && r.customer_status !== 0)
+      .map((r) => r.id);
+
     if (ids.length === 0) return;
 
     setRows((prev) =>
       prev.map((r) =>
-        selectedIds.has(r.id)
+        ids.includes(r.id)
           ? { ...r, invoiced: false, payment: "unpaid", invoice_number: null }
           : r
       )
@@ -613,7 +678,9 @@ const InternnetManagerForm: React.FC = () => {
   };
 
   const handlePrintInvoices = () => {
-    const selectedRows = rows.filter((r) => selectedIds.has(r.id));
+    const selectedRows = rows.filter(
+      (r) => selectedIds.has(r.id) && r.customer_status !== 0
+    );
     if (selectedRows.length === 0) return;
 
     sessionStorage.setItem(
@@ -659,7 +726,13 @@ const InternnetManagerForm: React.FC = () => {
   );
 
   const selectedHasInvoiced = useMemo(
-    () => rows.some((r) => selectedIds.has(r.id) && r.invoiced),
+    () =>
+      rows.some(
+        (r) =>
+          selectedIds.has(r.id) &&
+          r.invoiced &&
+          r.customer_status !== 0
+      ),
     [rows, selectedIds]
   );
 
@@ -694,7 +767,6 @@ const InternnetManagerForm: React.FC = () => {
       await loadPaymentsForInvoice(activeRow.invoice_number, invoiceMonth);
 
       setNewPayAmount("");
-      // modalDeduction & modalNetAmount are recalculated by useEffect from payments
     } catch (e) {
       // optional error handling
     }
@@ -1042,12 +1114,83 @@ const InternnetManagerForm: React.FC = () => {
             gap: 2,
           }}
         >
-          <Typography
-            variant="subtitle1"
-            sx={{ fontWeight: 600, color: "text.secondary" }}
-          >
-            Internet Manager Panel
-          </Typography>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+            <Typography
+              variant="subtitle1"
+              sx={{ fontWeight: 600, color: "text.secondary" }}
+            >
+              Internet Manager Panel
+            </Typography>
+
+            {/* Legend / hint for row colors */}
+            <Stack
+              direction="row"
+              spacing={2}
+              alignItems="center"
+              sx={{ mt: 0.5 }}
+            >
+              <Typography
+                variant="caption"
+                sx={{ fontFamily: tableFontFamily, color: "text.secondary" }}
+              >
+                Row colors:
+              </Typography>
+
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Box
+                  sx={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: 0.7,
+                    bgcolor: "#e8f5e9",
+                    border: "1px solid #c8e6c9",
+                  }}
+                />
+                <Typography
+                  variant="caption"
+                  sx={{ fontFamily: tableFontFamily }}
+                >
+                  Paid
+                </Typography>
+              </Stack>
+
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Box
+                  sx={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: 0.7,
+                    bgcolor: "#fffde7",
+                    border: "1px solid #fff9c4",
+                  }}
+                />
+                <Typography
+                  variant="caption"
+                  sx={{ fontFamily: tableFontFamily }}
+                >
+                  Partial
+                </Typography>
+              </Stack>
+
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Box
+                  sx={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: 0.7,
+                    bgcolor: "#ffebee",
+                    border: "1px solid #ffcdd2",
+                  }}
+                />
+                <Typography
+                  variant="caption"
+                  sx={{ fontFamily: tableFontFamily }}
+                >
+                  Unpaid
+                </Typography>
+              </Stack>
+            </Stack>
+          </Box>
 
           <Stack direction="row" spacing={1}>
             <Button
@@ -1258,32 +1401,49 @@ const InternnetManagerForm: React.FC = () => {
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredAndSortedRows.map((row, index) => {
+                filteredAndSortedRows.map((row) => {
                   const isChecked = selectedIds.has(row.id);
+                  const isDisabledRow = row.customer_status === 0;
+                  const baseBg = getPaymentRowColor(row.payment);
+
                   return (
                     <TableRow
-                      key={row.id}
-                      hover
-                      onDoubleClick={() => handleRowDoubleClick(row)}
-                      sx={{
-                        cursor: "pointer",
-                        backgroundColor:
-                          index % 2 === 0 ? "background.paper" : "#f5f5f5",
-                        "&:hover": { backgroundColor: "#e0f2f1" },
-                      }}
-                    >
+  key={row.id}
+  hover={!["stopped"].includes(row.status)}   // ❌ disable hover for stopped rows
+  onDoubleClick={() => {
+    if (row.status !== "stopped") handleRowDoubleClick(row);
+  }}
+  sx={{
+    cursor: row.status === "stopped" ? "not-allowed" : "pointer",
+    backgroundColor:
+      row.status === "stopped"
+        ? "#b71c1c" // 🔴 dark red for disabled customers
+        : getPaymentRowColor(row.payment),
+    opacity: row.status === "stopped" ? 0.7 : 1,
+    "&:hover": {
+      backgroundColor:
+        row.status === "stopped"
+          ? "#b71c1c"
+          : getPaymentRowColor(row.payment),
+      filter: row.status === "stopped" ? "none" : "brightness(0.97)",
+    },
+  }}
+>
                       <TableCell sx={{ width: 50, textAlign: "center" }}>
-                        <img
-                          src={WishLogo}
-                          alt="Wish Money"
-                          style={{ width: 38, height: 38, borderRadius: 4 }}
-                        />
-                      </TableCell>
+  {row.wish === 1 ? (
+    <img
+      src={WishLogo}
+      alt="Wish Money"
+      style={{ width: 38, height: 38, borderRadius: 4 }}
+    />
+  ) : null}
+</TableCell>
 
                       <TableCell sx={{ width: 40, textAlign: "center" }}>
                         <Checkbox
                           size="small"
                           checked={isChecked}
+                          disabled={isDisabledRow}
                           onChange={(e) =>
                             handleToggleOne(row.id, e.target.checked)
                           }
@@ -1329,7 +1489,7 @@ const InternnetManagerForm: React.FC = () => {
                             e.stopPropagation();
                             handleInvoiceRow(row);
                           }}
-                          disabled={row.invoiced}
+                          disabled={row.invoiced || isDisabledRow}
                           sx={{
                             textTransform: "none",
                             fontSize: "0.75rem",
@@ -1348,7 +1508,12 @@ const InternnetManagerForm: React.FC = () => {
                             e.stopPropagation();
                             handlePayRow(row);
                           }}
-                          disabled={!row.invoice_number || row.payment === "paid"}
+                          disabled={
+                            isDisabledRow ||
+                            !row.invoice_number ||
+                            !row.invoiced ||
+                            row.payment === "paid"
+                          }
                           sx={{
                             textTransform: "none",
                             fontSize: "0.75rem",
@@ -1436,8 +1601,9 @@ const InternnetManagerForm: React.FC = () => {
                   fullWidth
                   type="number"
                   value={modalAmount}
-                  onChange={(e) => setModalAmount(e.target.value)}
+                  disabled
                   InputProps={{
+                    readOnly: true,
                     endAdornment: (
                       <InputAdornment position="end">USD</InputAdornment>
                     ),
@@ -1495,6 +1661,7 @@ const InternnetManagerForm: React.FC = () => {
                 type="number"
                 value={newPayAmount}
                 onChange={(e) => setNewPayAmount(e.target.value)}
+                disabled={isNetZero}
                 InputProps={{
                   endAdornment: (
                     <InputAdornment position="end">USD</InputAdornment>

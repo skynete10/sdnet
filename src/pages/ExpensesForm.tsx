@@ -18,12 +18,12 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  MenuItem,
   InputAdornment,
 } from "@mui/material";
 import { Autocomplete } from "@mui/material";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import DownloadIcon from "@mui/icons-material/Download";
+import PrintIcon from "@mui/icons-material/Print";
 import axios from "axios";
 import * as XLSX from "xlsx";
 
@@ -33,13 +33,9 @@ type Expense = {
   id: number;
   expense_date: string; // YYYY-MM-DD
   category: string;
-  description: string;
+  description: string | null;
   amount: number; // stored in LBP in DB
-  payment_method: "cash" | "card" | "bank" | "other";
-  employee_name: string;
-  supplier_name: string;
-  receipt_number: string;
-  notes: string;
+  notes: string | null;
 };
 
 type NewExpense = {
@@ -47,10 +43,6 @@ type NewExpense = {
   category: string;
   description: string;
   amount: string; // formatted with commas, USD or LBP in UI
-  payment_method: "cash" | "card" | "bank" | "other";
-  employee_name: string;
-  supplier_name: string;
-  receipt_number: string;
   notes: string;
 };
 
@@ -62,10 +54,6 @@ type SaveExpensePayload = {
   category: string;
   description: string;
   amount: number; // always LBP
-  payment_method: "cash" | "card" | "bank" | "other";
-  employee_name: string;
-  supplier_name: string;
-  receipt_number: string;
   notes: string;
 };
 
@@ -73,14 +61,7 @@ type Order = "asc" | "desc";
 
 type SortKey = keyof Pick<
   Expense,
-  | "expense_date"
-  | "category"
-  | "description"
-  | "amount"
-  | "payment_method"
-  | "employee_name"
-  | "supplier_name"
-  | "receipt_number"
+  "expense_date" | "category" | "description" | "amount"
 >;
 
 const tableFontFamily =
@@ -98,16 +79,6 @@ const expenseCategories: string[] = [
   "Office Supplies",
   "Marketing",
   "Other",
-];
-
-const paymentMethods: Array<{
-  value: "cash" | "card" | "bank" | "other";
-  label: string;
-}> = [
-  { value: "cash", label: "Cash" },
-  { value: "card", label: "Card" },
-  { value: "bank", label: "Bank Transfer" },
-  { value: "other", label: "Other" },
 ];
 
 // ---- helpers ----
@@ -162,8 +133,6 @@ const saveExpense = async (data: SaveExpensePayload) => {
 const ExpensesForm: React.FC = () => {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [searchFilter, setSearchFilter] = useState("");
-  const [employeeFilter, setEmployeeFilter] = useState("");
-  const [supplierFilter, setSupplierFilter] = useState("");
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -184,10 +153,6 @@ const ExpensesForm: React.FC = () => {
     category: "",
     description: "",
     amount: "",
-    payment_method: "cash",
-    employee_name: "",
-    supplier_name: "",
-    receipt_number: "",
     notes: "",
   };
 
@@ -198,18 +163,14 @@ const ExpensesForm: React.FC = () => {
   const [currency, setCurrency] = useState<"USD" | "LBP">("LBP");
   const [usdRate] = useState<number>(90000); // Example: 1 USD = 90,000 LBP
 
-  // For dropdowns
-  const [employeeOptions, setEmployeeOptions] = useState<string[]>([]);
-  const [supplierOptions, setSupplierOptions] = useState<string[]>([]);
+  // Filters: date range (default both = today)
+  const [filterFromDate, setFilterFromDate] = useState<string>(todayStr);
+  const [filterToDate, setFilterToDate] = useState<string>(todayStr);
 
-  // ---- load expenses + employees + suppliers ----
+  // ---- load expenses ----
   const loadData = async () => {
     try {
-      const [expRes, empRes, supRes] = await Promise.all([
-        axios.get(`${API_BASE_URL}/api/expenses`),
-        axios.get(`${API_BASE_URL}/api/employees`),
-        axios.get(`${API_BASE_URL}/api/suppliers`),
-      ]);
+      const expRes = await axios.get(`${API_BASE_URL}/api/expenses`);
 
       const expData = expRes.data as any[];
       const mappedExpenses: Expense[] = expData.map((row) => ({
@@ -218,25 +179,11 @@ const ExpensesForm: React.FC = () => {
         category: row.category ?? "",
         description: row.description ?? "",
         amount: Number(row.amount ?? 0),
-        payment_method: row.payment_method || "cash",
-        employee_name: row.employee_name ?? "",
-        supplier_name: row.supplier_name ?? "",
-        receipt_number: row.receipt_number ?? "",
         notes: row.notes ?? "",
       }));
       setExpenses(mappedExpenses);
-
-      const empData = empRes.data as any[];
-      setEmployeeOptions(
-        empData.map((e) => e.fullname || e.name).filter((x: string) => !!x)
-      );
-
-      const supData = supRes.data as any[];
-      setSupplierOptions(
-        supData.map((s) => s.name || s.fullname).filter((x: string) => !!x)
-      );
     } catch (err) {
-      console.warn("Failed loading expenses/employees/suppliers", err);
+      console.warn("Failed loading expenses", err);
     }
   };
 
@@ -253,36 +200,24 @@ const ExpensesForm: React.FC = () => {
   const filteredAndSortedExpenses = useMemo(() => {
     const filtered = expenses.filter((e) => {
       const text = (
-        e.category +
+        (e.category || "") +
         " " +
-        e.description +
+        (e.description || "") +
         " " +
-        e.employee_name +
-        " " +
-        e.supplier_name +
-        " " +
-        e.receipt_number
+        (e.notes || "")
       )
         .toLowerCase()
         .trim();
 
       const searchMatch =
-        !searchFilter ||
-        text.includes(searchFilter.toLowerCase().trim());
+        !searchFilter || text.includes(searchFilter.toLowerCase().trim());
 
-      const employeeMatch =
-        !employeeFilter ||
-        e.employee_name
-          .toLowerCase()
-          .includes(employeeFilter.toLowerCase().trim());
+      const dateFromMatch =
+        !filterFromDate || e.expense_date >= filterFromDate;
 
-      const supplierMatch =
-        !supplierFilter ||
-        e.supplier_name
-          .toLowerCase()
-          .includes(supplierFilter.toLowerCase().trim());
+      const dateToMatch = !filterToDate || e.expense_date <= filterToDate;
 
-      return searchMatch && employeeMatch && supplierMatch;
+      return searchMatch && dateFromMatch && dateToMatch;
     });
 
     return [...filtered].sort((a, b) => {
@@ -299,7 +234,7 @@ const ExpensesForm: React.FC = () => {
       if (aVal > bVal) return order === "asc" ? 1 : -1;
       return 0;
     });
-  }, [expenses, searchFilter, employeeFilter, supplierFilter, order, orderBy]);
+  }, [expenses, searchFilter, order, orderBy, filterFromDate, filterToDate]);
 
   // ---- Import Excel ----
   const handleImportClick = () => {
@@ -317,15 +252,11 @@ const ExpensesForm: React.FC = () => {
       const formData = new FormData();
       formData.append("file", file);
 
-      await axios.post(
-        `${API_BASE_URL}/api/expenses/import-excel`,
-        formData,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
-          },
-        }
-      );
+      await axios.post(`${API_BASE_URL}/api/expenses/import-excel`, formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      });
 
       await loadData();
     } catch (err: any) {
@@ -348,10 +279,6 @@ const ExpensesForm: React.FC = () => {
       Category: e.category,
       Description: e.description,
       Amount_LBP: e.amount,
-      Payment_Method: e.payment_method,
-      Employee: e.employee_name,
-      Supplier: e.supplier_name,
-      Receipt: e.receipt_number,
       Notes: e.notes,
     }));
 
@@ -361,6 +288,155 @@ const ExpensesForm: React.FC = () => {
     XLSX.writeFile(workbook, "expenses.xlsx");
   };
 
+  // ---- Print Expenses ----
+  const handlePrintExpenses = () => {
+    if (!filteredAndSortedExpenses.length) return;
+
+    const total = filteredAndSortedExpenses.reduce(
+      (sum, e) => sum + (e.amount || 0),
+      0
+    );
+
+    const rowsHtml = filteredAndSortedExpenses
+      .map(
+        (e, idx) => `
+      <tr class="${idx % 2 === 0 ? "even" : "odd"}">
+        <td>${e.expense_date}</td>
+        <td>${e.category || ""}</td>
+        <td>${e.description || ""}</td>
+        <td style="text-align:right;">${formatWithCommas(
+          String(e.amount),
+          0
+        )}</td>
+        <td>${e.notes || ""}</td>
+      </tr>
+    `
+      )
+      .join("");
+
+    const filterSummaryParts: string[] = [];
+    if (filterFromDate) filterSummaryParts.push(`From: ${filterFromDate}`);
+    if (filterToDate) filterSummaryParts.push(`To: ${filterToDate}`);
+    if (searchFilter)
+      filterSummaryParts.push(`Search: "${searchFilter.trim()}"`);
+
+    const filterSummary =
+      filterSummaryParts.length > 0
+        ? filterSummaryParts.join(" | ")
+        : "No filters applied";
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Expenses Report</title>
+        <meta charset="utf-8" />
+        <style>
+          body {
+            font-family: ${tableFontFamily};
+            margin: 20px;
+            color: #333;
+          }
+          h1 {
+            text-align: center;
+            margin-bottom: 5px;
+          }
+          h2 {
+            text-align: center;
+            margin-top: 0;
+            font-size: 0.95rem;
+            color: #666;
+          }
+          .meta {
+            margin: 15px 0;
+            font-size: 0.85rem;
+            color: #555;
+          }
+          .meta strong {
+            font-weight: 600;
+          }
+          table {
+            border-collapse: collapse;
+            width: 100%;
+            font-size: 0.85rem;
+          }
+          th, td {
+            border: 1px solid #ccc;
+            padding: 6px 8px;
+            vertical-align: top;
+          }
+          th {
+            background: linear-gradient(90deg, #004d40 0%, #00897b 50%, #009688 100%);
+            color: white;
+            font-weight: 700;
+            text-align: left;
+          }
+          tr.even {
+            background-color: #fafafa;
+          }
+          tr.odd {
+            background-color: #ffffff;
+          }
+          tfoot td {
+            font-weight: 700;
+            border-top: 2px solid #004d40;
+          }
+          @media print {
+            body {
+              margin: 10mm;
+            }
+            h1 {
+              font-size: 1.3rem;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <h1>Expenses Report</h1>
+        <h2>${new Date().toLocaleString()}</h2>
+        <div class="meta">
+          <strong>Filters:</strong> ${filterSummary}
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width:90px;">Date</th>
+              <th style="width:140px;">Category</th>
+              <th>Description</th>
+              <th style="width:110px; text-align:right;">Amount (LBP)</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="3">Total</td>
+              <td style="text-align:right;">${formatWithCommas(
+                String(total),
+                0
+              )}</td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </body>
+      </html>
+    `;
+
+    const printWindow = window.open("", "_blank", "width=900,height=700");
+    if (!printWindow) return;
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+    }, 500);
+  };
+
   // ---- Validation ----
   const validateForm = (): boolean => {
     const errors: FormErrors = {};
@@ -368,14 +444,9 @@ const ExpensesForm: React.FC = () => {
     if (!newExpense.expense_date.trim()) {
       errors.expense_date = "Date is required";
     }
-    if (!newExpense.category.trim()) {
-      errors.category = "Category is required";
-    }
+    // category is optional
     if (!newExpense.amount.trim()) {
       errors.amount = "Amount is required";
-    }
-    if (!newExpense.payment_method) {
-      errors.payment_method = "Payment method is required";
     }
 
     setFormErrors(errors);
@@ -389,19 +460,14 @@ const ExpensesForm: React.FC = () => {
       const rawAmount = normalizeNumberString(newExpense.amount);
       const num = Number(rawAmount) || 0;
 
-      const normalizedAmountLBP =
-        currency === "USD" ? num * usdRate : num;
+      const normalizedAmountLBP = currency === "USD" ? num * usdRate : num;
 
       const payload: SaveExpensePayload = {
         id: modalMode === "edit" && editingId != null ? editingId : undefined,
         expense_date: newExpense.expense_date,
-        category: newExpense.category,
+        category: newExpense.category, // can be empty
         description: newExpense.description,
         amount: normalizedAmountLBP,
-        payment_method: newExpense.payment_method,
-        employee_name: newExpense.employee_name,
-        supplier_name: newExpense.supplier_name,
-        receipt_number: newExpense.receipt_number,
         notes: newExpense.notes,
       };
 
@@ -427,13 +493,9 @@ const ExpensesForm: React.FC = () => {
     setNewExpense({
       expense_date: exp.expense_date || todayStr,
       category: exp.category,
-      description: exp.description,
+      description: exp.description || "",
       amount: formatWithCommas(String(exp.amount), 0),
-      payment_method: exp.payment_method || "cash",
-      employee_name: exp.employee_name,
-      supplier_name: exp.supplier_name,
-      receipt_number: exp.receipt_number,
-      notes: exp.notes,
+      notes: exp.notes || "",
     });
     setFormErrors({});
     setOpenModal(true);
@@ -484,7 +546,6 @@ const ExpensesForm: React.FC = () => {
     setNewExpense({
       ...emptyExpenseForm,
       expense_date: todayStr,
-      payment_method: "cash",
     });
     setFormErrors({});
     setOpenModal(true);
@@ -492,7 +553,7 @@ const ExpensesForm: React.FC = () => {
 
   return (
     <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
-      {/* Header bar – same style as CustomersForm */}
+      {/* Header bar */}
       <Paper
         sx={{
           p: 2,
@@ -591,6 +652,27 @@ const ExpensesForm: React.FC = () => {
           >
             Export to Excel
           </Button>
+
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<PrintIcon />}
+            onClick={handlePrintExpenses}
+            disabled={!filteredAndSortedExpenses.length}
+            sx={{
+              textTransform: "none",
+              fontWeight: 600,
+              fontFamily: tableFontFamily,
+              borderColor: "#ffcdd2",
+              color: "#ffffff",
+              "&:hover": {
+                borderColor: "#ffffff",
+                backgroundColor: "rgba(255,255,255,0.18)",
+              },
+            }}
+          >
+            Print Expenses
+          </Button>
         </Stack>
       </Paper>
 
@@ -604,7 +686,7 @@ const ExpensesForm: React.FC = () => {
         </Typography>
       )}
 
-      {/* Filter panel – same style as CustomersForm */}
+      {/* Filter panel */}
       <Paper
         sx={{
           p: 2.5,
@@ -629,7 +711,7 @@ const ExpensesForm: React.FC = () => {
             Filters
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            Type to narrow down results. Export respects your filters.
+            Filters apply to the table, export, and print report.
           </Typography>
         </Stack>
 
@@ -640,8 +722,41 @@ const ExpensesForm: React.FC = () => {
           spacing={2}
           alignItems={{ xs: "stretch", md: "flex-end" }}
         >
+          {/* From date */}
           <TextField
-            label="Search (Category / Description / Receipt)"
+            label="From date"
+            type="date"
+            size="small"
+            value={filterFromDate}
+            onChange={(e) => setFilterFromDate(e.target.value)}
+            InputLabelProps={{
+              shrink: true,
+              sx: { fontFamily: tableFontFamily, fontSize: "0.85rem" },
+            }}
+            InputProps={{
+              sx: { fontFamily: tableFontFamily, fontSize: "0.9rem" },
+            }}
+          />
+
+          {/* To date */}
+          <TextField
+            label="To date"
+            type="date"
+            size="small"
+            value={filterToDate}
+            onChange={(e) => setFilterToDate(e.target.value)}
+            InputLabelProps={{
+              shrink: true,
+              sx: { fontFamily: tableFontFamily, fontSize: "0.85rem" },
+            }}
+            InputProps={{
+              sx: { fontFamily: tableFontFamily, fontSize: "0.9rem" },
+            }}
+          />
+
+          {/* Search */}
+          <TextField
+            label="Search (Category / Description / Notes)"
             variant="outlined"
             size="small"
             fullWidth
@@ -660,50 +775,10 @@ const ExpensesForm: React.FC = () => {
               },
             }}
           />
-          <TextField
-            label="Employee"
-            variant="outlined"
-            size="small"
-            fullWidth
-            value={employeeFilter}
-            onChange={(e) => setEmployeeFilter(e.target.value)}
-            InputProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.9rem",
-              },
-            }}
-            InputLabelProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.85rem",
-              },
-            }}
-          />
-          <TextField
-            label="Supplier"
-            variant="outlined"
-            size="small"
-            fullWidth
-            value={supplierFilter}
-            onChange={(e) => setSupplierFilter(e.target.value)}
-            InputProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.9rem",
-              },
-            }}
-            InputLabelProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.85rem",
-              },
-            }}
-          />
         </Stack>
       </Paper>
 
-      {/* Table – same style as CustomersForm */}
+      {/* Table */}
       <Paper
         sx={{
           borderRadius: 2,
@@ -739,16 +814,12 @@ const ExpensesForm: React.FC = () => {
                 {renderSortableHeaderCell("Category", "category")}
                 {renderSortableHeaderCell("Description", "description")}
                 {renderSortableHeaderCell("Amount (LBP)", "amount")}
-                {renderSortableHeaderCell("Payment", "payment_method")}
-                {renderSortableHeaderCell("Employee", "employee_name")}
-                {renderSortableHeaderCell("Supplier", "supplier_name")}
-                {renderSortableHeaderCell("Receipt", "receipt_number")}
               </TableRow>
             </TableHead>
             <TableBody>
               {filteredAndSortedExpenses.length === 0 ? (
                 <TableRow tabIndex={-1}>
-                  <TableCell colSpan={8} align="center">
+                  <TableCell colSpan={4} align="center">
                     <Typography
                       variant="body2"
                       color="text.secondary"
@@ -795,24 +866,6 @@ const ExpensesForm: React.FC = () => {
                     >
                       {formatWithCommas(String(e.amount), 0)}
                     </TableCell>
-                    <TableCell
-                      sx={{
-                        fontSize: "0.9rem",
-                        fontWeight: 500,
-                        textTransform: "capitalize",
-                      }}
-                    >
-                      {e.payment_method}
-                    </TableCell>
-                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
-                      {e.employee_name}
-                    </TableCell>
-                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 500 }}>
-                      {e.supplier_name}
-                    </TableCell>
-                    <TableCell sx={{ fontSize: "0.9rem", fontWeight: 400 }}>
-                      {e.receipt_number}
-                    </TableCell>
                   </TableRow>
                 ))
               )}
@@ -821,10 +874,16 @@ const ExpensesForm: React.FC = () => {
         </TableContainer>
       </Paper>
 
-      {/* Add / Edit Expense Modal – same style as CustomersForm dialog */}
+      {/* Add / Edit Expense Modal */}
       <Dialog
         open={openModal}
-        onClose={() => setOpenModal(false)}
+        onClose={() => {
+          setOpenModal(false);
+          setNewExpense(emptyExpenseForm);
+          setFormErrors({});
+          setEditingId(null);
+          setCurrency("LBP");
+        }}
         maxWidth="sm"
         fullWidth
         PaperProps={{
@@ -859,7 +918,9 @@ const ExpensesForm: React.FC = () => {
               fullWidth
               size="small"
               value={newExpense.expense_date}
-              onChange={(e) => handleFieldChange("expense_date", e.target.value)}
+              onChange={(e) =>
+                handleFieldChange("expense_date", e.target.value)
+              }
               error={!!formErrors.expense_date}
               helperText={formErrors.expense_date || " "}
               InputLabelProps={{
@@ -871,7 +932,7 @@ const ExpensesForm: React.FC = () => {
               }}
             />
 
-            {/* Category */}
+            {/* Category (optional) */}
             <Autocomplete
               options={expenseCategories}
               value={newExpense.category}
@@ -882,10 +943,9 @@ const ExpensesForm: React.FC = () => {
               renderInput={(params) => (
                 <TextField
                   {...params}
-                  label="Category"
+                  label="Category (optional)"
                   size="small"
-                  error={!!formErrors.category}
-                  helperText={formErrors.category || " "}
+                  helperText={" "}
                   InputProps={{
                     ...params.InputProps,
                     sx: { fontFamily: tableFontFamily },
@@ -964,102 +1024,6 @@ const ExpensesForm: React.FC = () => {
                     </Button>
                   </InputAdornment>
                 ),
-              }}
-              InputLabelProps={{
-                sx: { fontFamily: tableFontFamily },
-              }}
-            />
-
-            {/* Payment method */}
-            <TextField
-              label="Payment Method"
-              fullWidth
-              size="small"
-              select
-              value={newExpense.payment_method}
-              onChange={(e) =>
-                handleFieldChange(
-                  "payment_method",
-                  e.target.value as NewExpense["payment_method"]
-                )
-              }
-              error={!!formErrors.payment_method}
-              helperText={formErrors.payment_method || " "}
-              InputProps={{
-                sx: { fontFamily: tableFontFamily },
-              }}
-              InputLabelProps={{
-                sx: { fontFamily: tableFontFamily },
-              }}
-            >
-              {paymentMethods.map((pm) => (
-                <MenuItem key={pm.value} value={pm.value}>
-                  {pm.label}
-                </MenuItem>
-              ))}
-            </TextField>
-
-            {/* Employee */}
-            <Autocomplete
-              options={employeeOptions}
-              value={newExpense.employee_name}
-              onChange={(_, value) =>
-                handleFieldChange("employee_name", value || "")
-              }
-              freeSolo
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label="Employee"
-                  size="small"
-                  InputProps={{
-                    ...params.InputProps,
-                    sx: { fontFamily: tableFontFamily },
-                  }}
-                  InputLabelProps={{
-                    sx: { fontFamily: tableFontFamily },
-                  }}
-                />
-              )}
-            />
-
-            {/* Supplier */}
-            <Autocomplete
-              options={supplierOptions}
-              value={newExpense.supplier_name}
-              onChange={(_, value) =>
-                handleFieldChange("supplier_name", value || "")
-              }
-              freeSolo
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label="Supplier"
-                  size="small"
-                  InputProps={{
-                    ...params.InputProps,
-                    sx: { fontFamily: tableFontFamily },
-                  }}
-                  InputLabelProps={{
-                    sx: { fontFamily: tableFontFamily },
-                  }}
-                />
-              )}
-            />
-
-            {/* Receipt number */}
-            <TextField
-              label="Receipt Number"
-              fullWidth
-              size="small"
-              value={newExpense.receipt_number}
-              onChange={(e) =>
-                handleFieldChange("receipt_number", e.target.value)
-              }
-              InputProps={{
-                sx: {
-                  fontFamily: tableFontFamily,
-                },
               }}
               InputLabelProps={{
                 sx: { fontFamily: tableFontFamily },

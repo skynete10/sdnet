@@ -28,6 +28,9 @@ import HomeWorkOutlinedIcon from "@mui/icons-material/HomeWorkOutlined";
 import axios from "axios";
 import * as XLSX from "xlsx";
 
+// ⚠️ Adjust this path to where your logo actually is
+import wishMoneyLogo from "../assets/wishmoneylogo.png";
+
 const API_BASE_URL = "http://127.0.0.1:5100";
 
 type CustomerStatus = "active" | "inactive";
@@ -42,6 +45,7 @@ type Customer = {
   street: string;
   building: string;
   status?: CustomerStatus; // "active" | "inactive"
+  wish?: boolean; // Wish Money flag
 };
 
 type NewCustomer = {
@@ -102,6 +106,13 @@ const updateCustomerStatus = async (id: number, status: CustomerStatus) => {
   await axios.post(`${API_BASE_URL}/api/customers/update-status`, {
     id,
     status,
+  });
+};
+
+const updateCustomerWish = async (id: number, wish: boolean) => {
+  await axios.post(`${API_BASE_URL}/api/customers/update-wish`, {
+    id,
+    wish,
   });
 };
 
@@ -204,37 +215,46 @@ const CustomersForm: React.FC = () => {
 
   // ---- Load customers from API (updated) ----
   const loadCustomers = async () => {
-  try {
-    const res = await axios.get(`${API_BASE_URL}/api/customers`);
-    const apiData = res.data as any[];
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/customers`);
+      const apiData = res.data as any[];
 
-    const mapped: Customer[] = apiData.map((row) => {
-      let status: CustomerStatus = "active";
+      const mapped: Customer[] = apiData.map((row) => {
+        let status: CustomerStatus = "active";
 
-      if (row.status === 0 || row.status === "0") {
-        status = "inactive";
-      } else if (row.customer_status === 0 || row.customer_status === "0") {
-        status = "inactive";
-      }
+        if (row.status === 0 || row.status === "0") {
+          status = "inactive";
+        } else if (row.customer_status === 0 || row.customer_status === "0") {
+          status = "inactive";
+        }
 
-      return {
-        id: row.id,
-        fullname: row.fullname,
-        mobile: row.mobile,
-        username: row.username,
-        city: row.city ?? "",
-        village: row.village ?? "",
-        street: row.street ?? "",
-        building: row.building ?? "",
-        status,
-      };
-    });
+        const wish =
+          row.wish === 1 ||
+          row.wish === "1" ||
+          row.wish === true ||
+          row.is_wish === 1 ||
+          row.is_wish === "1" ||
+          row.is_wish === true;
 
-    setCustomers(mapped);
-  } catch (e) {
-    console.warn("Could not load customers from API.", e);
-  }
-};
+        return {
+          id: row.id,
+          fullname: row.fullname,
+          mobile: row.mobile,
+          username: row.username,
+          city: row.city ?? "",
+          village: row.village ?? "",
+          street: row.street ?? "",
+          building: row.building ?? "",
+          status,
+          wish,
+        };
+      });
+
+      setCustomers(mapped);
+    } catch (e) {
+      console.warn("Could not load customers from API.", e);
+    }
+  };
 
   useEffect(() => {
     loadCustomers();
@@ -272,8 +292,7 @@ const CustomersForm: React.FC = () => {
       const firstCityWord = getFirstCityWord(c.city).toLowerCase();
 
       const addressMatch =
-        !addressFilter ||
-        firstCityWord === addressFilter.toLowerCase();
+        !addressFilter || firstCityWord === addressFilter.toLowerCase();
 
       return nameMatch && mobileMatch && addressMatch;
     });
@@ -335,6 +354,7 @@ const CustomersForm: React.FC = () => {
       Street: c.street,
       Building: c.building,
       Status: c.status ?? "active",
+      "Wish Money": c.wish ? "Yes" : "No",
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(exportData);
@@ -403,6 +423,24 @@ const CustomersForm: React.FC = () => {
     setFormErrors({});
     setOpenNewCustomer(true);
   };
+
+  // ---- Toggle Wish Money flag (local state only) ----
+  const handleToggleWish = async (customer: Customer) => {
+  const newWish = !customer.wish; // if undefined, becomes true
+
+  try {
+    await updateCustomerWish(customer.id, newWish);
+
+    setCustomers((prev) =>
+      prev.map((c) =>
+        c.id === customer.id ? { ...c, wish: newWish } : c
+      )
+    );
+  } catch (err) {
+    console.error("Failed to update wish", err);
+    alert("Failed to update Wish Money flag");
+  }
+};
 
   const renderSortableHeaderCell = (label: string, property: SortKey) => (
     <TableCell
@@ -731,12 +769,48 @@ const CustomersForm: React.FC = () => {
                 {renderSortableHeaderCell("Street", "street")}
                 {renderSortableHeaderCell("Building", "building")}
                 {renderSortableHeaderCell("Status", "status")}
+                {/* Wish Money column (not sortable) */}
+                <TableCell
+                  sx={{
+                    fontFamily: tableFontFamily,
+                    fontWeight: 700,
+                    fontSize: "0.95rem",
+                    color: "#fff",
+                    whiteSpace: "nowrap",
+                    userSelect: "none",
+                  }}
+                >
+                  <Box
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 1,
+                    }}
+                  >
+                    <Box
+                      component="img"
+                      src={wishMoneyLogo}
+                      alt="Wish Money"
+                      sx={{ height: 18 }}
+                    />
+                    <Typography
+                      component="span"
+                      sx={{
+                        fontFamily: tableFontFamily,
+                        fontWeight: 700,
+                        fontSize: "0.9rem",
+                      }}
+                    >
+                      Wish
+                    </Typography>
+                  </Box>
+                </TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {filteredAndSortedCustomers.length === 0 ? (
                 <TableRow tabIndex={-1}>
-                  <TableCell colSpan={8} align="center">
+                  <TableCell colSpan={9} align="center">
                     <Typography
                       variant="body2"
                       color="text.secondary"
@@ -796,6 +870,25 @@ const CustomersForm: React.FC = () => {
                     >
                       {renderStatusChip(c.status)}
                     </TableCell>
+                    {/* Wish Money cell - red/green circle */}
+                    <TableCell
+  sx={{
+    textAlign: "center",
+    cursor: "pointer",
+  }}
+  onClick={() => handleToggleWish(c)}
+>
+  <Box
+    sx={{
+      width: 16,
+      height: 16,
+      borderRadius: "50%",
+      mx: "auto",
+      bgcolor: c.wish ? "#43a047" : "#e53935", 
+      boxShadow: "0 0 0 2px rgba(0,0,0,0.08)",
+    }}
+  />
+</TableCell>
                   </TableRow>
                 ))
               )}

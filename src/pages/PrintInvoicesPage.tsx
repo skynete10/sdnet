@@ -83,10 +83,9 @@ const PrintInvoicesPage: React.FC = () => {
           color: #111827;
         }
 
-        /* ✅ 2 invoices per line */
         .grid {
           display: grid;
-          grid-template-columns: repeat(2, 1fr);
+          grid-template-columns: 1fr;
           gap: 6mm;
         }
 
@@ -96,7 +95,6 @@ const PrintInvoicesPage: React.FC = () => {
           width: 100%;
         }
 
-        /* ✅ page break after every 8 invoices */
         .page-break {
           break-after: page;
           page-break-after: always;
@@ -106,8 +104,70 @@ const PrintInvoicesPage: React.FC = () => {
           border: 1px solid #d0d5dd;
           border-radius: 10px;
           overflow: hidden;
-          padding: 8px 10px;
           font-size: 11px;
+        }
+
+        .invoice-sections {
+          display: flex;
+          height: 100%;
+        }
+
+        .invoice-stub {
+          width: 32%;
+          padding: 8px 10px;
+          border-right: 1px dotted #cbd5e1;
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
+        }
+
+        .invoice-main {
+          flex: 1;
+          padding: 8px 10px;
+        }
+
+        /* TITLES */
+        .title-stub {
+          font-size: 16px;
+          font-weight: 900;
+          text-align: center;
+          margin-bottom: 2px;
+        }
+
+        .title-main {
+          font-size: 18px;
+          font-weight: 900;
+          text-align: center;
+          margin-bottom: 2px;
+        }
+
+        .stub-meta {
+          font-size: 9px;
+          color: #555;
+          margin-top: 2px;
+          text-align: center;
+        }
+
+        .stub-no {
+          margin-top: 8px;
+          font-size: 13px;
+          font-weight: 900;
+          color: #d32f2f;
+          text-align: left;
+        }
+
+        .stub-no small {
+          display: block;
+          font-size: 8px;
+          color: #777;
+          margin-bottom: 1px;
+        }
+
+        .stub-amount {
+          margin-top: 12px;
+          font-size: 10px;
+          font-weight: 700;
+          text-align: center;
         }
 
         .top-row {
@@ -119,10 +179,8 @@ const PrintInvoicesPage: React.FC = () => {
           margin-bottom: 6px;
         }
 
-        .title {
-          font-size: 10px;
-          font-weight: 800;
-          letter-spacing: 0.7px;
+        .top-left {
+          text-align: center;
         }
 
         .meta {
@@ -171,9 +229,16 @@ const PrintInvoicesPage: React.FC = () => {
           text-align: center;
         }
 
+        .amount-title {
+          font-size: 10px;
+          font-weight: 700;
+          margin-bottom: 3px;
+        }
+
         .amount {
-          font-size: 16px;
+          font-size: 18px;
           font-weight: 900;
+          line-height: 1.1;
         }
 
         .currency {
@@ -198,9 +263,17 @@ const PrintInvoicesPage: React.FC = () => {
           border-radius: 7px;
           padding: 5px 6px;
           font-size: 9px;
-          margin-top: 6px;
+          margin-top: 4px;
           text-align: right;
           line-height: 1.3;
+        }
+
+        .warn-title {
+          margin-top: 6px;
+          font-size: 11px;
+          font-weight: 900;
+          color: #b71c1c;
+          text-align: right;
         }
 
         .warn {
@@ -216,7 +289,7 @@ const PrintInvoicesPage: React.FC = () => {
 
         @media print {
           .grid {
-            grid-template-columns: repeat(2, 1fr);
+            grid-template-columns: 1fr;
           }
         }
       `}</style>
@@ -231,57 +304,86 @@ const PrintInvoicesPage: React.FC = () => {
           const name = escapeHtml(r.fullname);
           const username = escapeHtml(r.username);
 
-          // ✅ after 8 invoices, break page
-          const breakClass = (idx + 1) % 8 === 0 ? "page-break" : "";
+          const breakClass = (idx + 1) % 4 === 0 ? "page-break" : "";
 
           return (
             <div className={`invoice-wrap ${breakClass}`} key={r.id}>
               <div className="invoice">
-                <div className="top-row">
-                  <div>
-                    <div className="title">INVOICE</div>
-                    <div className="meta">Date: {nowDisplay}</div>
-                    <div className="meta">H&amp;M Net — Barja</div>
-                  </div>
-
-                  <div className="invoice-no">
-                    <small>No.</small>
-                    {invoiceNo}
-                  </div>
-                </div>
-
-                <div className="body">
-                  <div>
-                    <div className="label">اسم المشترك</div>
-                    <div className="value">{name}</div>
-
-                    <div className="label">اسم المستخدم</div>
-                    <div className="value">{username}</div>
-
-                    <div className="label">العنوان</div>
-                    <div className="value">
-                      {city}{village ? " - " + village : ""}
+                <div className="invoice-sections">
+                  {/* Left stub */}
+                  <div className="invoice-stub">
+                    <div>
+                      <div className="title-stub">H&amp;M Net</div>
+                      <div className="stub-meta">Barja</div>
+                      <div className="stub-meta">Date: {nowDisplay}</div>
+                      <div className="stub-amount">
+                        قيمة الاشتراك: {amount} USD
+                      </div>
+                    </div>
+                    <div className="stub-no">
+                      <small>No.</small>
+                      {invoiceNo}
                     </div>
                   </div>
 
-                  <div className="amount-box">
-                    <div className="label">قيمة الاشتراك</div>
-                    <div className="amount">
-                      {amount} <span className="currency">USD</span>
+                  {/* Main part */}
+                  <div className="invoice-main">
+                    <div className="top-row">
+                      <div className="top-left">
+                        <div className="title-main">H&amp;M Net</div>
+                        <div className="meta">Barja</div>
+                        <div className="meta">Date: {nowDisplay}</div>
+                      </div>
+
+                      <div className="invoice-no">
+                        <small>No.</small>
+                        {invoiceNo}
+                      </div>
                     </div>
 
-                    <div className="label">الاستحقاق</div>
-                    <div className="badge">{due || "—"}</div>
+                    <div className="body">
+                      <div>
+                        <div className="label">اسم المشترك</div>
+                        <div className="value">{name}</div>
+
+                        <div className="label">اسم المستخدم</div>
+                        <div className="value">{username}</div>
+
+                        <div className="label">العنوان</div>
+                        <div className="value">
+                          {city}
+                          {village ? " - " + village : ""}
+                        </div>
+                      </div>
+
+                      <div className="amount-box">
+                        <div className="amount-title">قيمة الاشتراك</div>
+                        <div className="amount">
+                          {amount} <span className="currency">USD</span>
+                        </div>
+
+                        <div className="label" style={{ marginTop: "6px" }}>
+                          الاستحقاق
+                        </div>
+                        <div className="badge">{due || "—"}</div>
+                      </div>
+                    </div>
+
+                    <div className="warn-title">تنبيه هام</div>
+
+                    <div className="note">
+                      في حال تريد قطع خدمة الانترنت، يرجى إبلاغنا بذلك قبل شهر
+                      بالاتصال بنا على الرقم 03/044549.
+                    </div>
+                    <div className="note">
+                      في حال أي عطل يرجى الإبلاغ على 03/685475 – وسام الحاج.
+                    </div>
+
+                    <div className="warn">
+                      الرجاء عدم الدفع إلا عند استلام الوصل مختوماً، تحت طائلة
+                      المسؤولية.
+                    </div>
                   </div>
-                </div>
-
-                <div className="note">
-                  للتوقف عن الخدمة: يرجى الاتصال قبل شهر.  
-                  للأعطال التقنية: 685475 / 03
-                </div>
-
-                <div className="warn">
-                  الرجاء عدم الدفع إلا بعد استلام هذا الإيصال مختوماً.
                 </div>
               </div>
             </div>
