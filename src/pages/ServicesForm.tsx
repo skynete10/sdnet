@@ -33,13 +33,13 @@ type Service = {
   service_name: string;
   service_price: number;
   service_status: ServiceStatus;
-  service_currency: Currency; // 👈 now part of row
+  service_currency: Currency;
 };
 
 type NewService = {
   service_code: string;
   service_name: string;
-  service_price: string; // use string for controlled TextField
+  service_price: string; // numeric string WITHOUT commas in state
   service_status: ServiceStatus;
   service_currency: Currency;
 };
@@ -66,6 +66,13 @@ type SortKey = keyof Pick<
   | "service_currency"
 >;
 
+type CurrencySettingsLS = {
+  from_currency: Currency;
+  to_currency: Currency;
+  conversion_operator: "*" | "/";
+  curr_rate: number;
+};
+
 const tableFontFamily =
   '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif';
 
@@ -76,6 +83,84 @@ const saveService = async (data: SaveServicePayload) => {
     data
   );
   return res.data;
+};
+
+// ---- Helpers to read and apply currency settings from localStorage ----
+const getCurrencySettingsFromLocalStorage = (): CurrencySettingsLS | null => {
+  if (typeof window === "undefined") return null;
+  const raw = localStorage.getItem("currency_settings");
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      (parsed.from_currency === "USD" || parsed.from_currency === "LBP") &&
+      (parsed.to_currency === "USD" || parsed.to_currency === "LBP") &&
+      (parsed.conversion_operator === "*" || parsed.conversion_operator === "/") &&
+      typeof parsed.curr_rate === "number"
+    ) {
+      return parsed as CurrencySettingsLS;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const convertPriceWithSettings = (
+  amount: number,
+  from: Currency,
+  to: Currency
+): number => {
+  if (from === to) return amount;
+
+  const cs = getCurrencySettingsFromLocalStorage();
+  if (!cs) return amount;
+
+  const { from_currency, to_currency, conversion_operator, curr_rate } = cs;
+
+  // Case 1: direct mapping (from -> to)
+  if (from === from_currency && to === to_currency) {
+    if (conversion_operator === "*") {
+      return amount * curr_rate;
+    } else {
+      return amount / curr_rate;
+    }
+  }
+
+  // Case 2: inverse mapping (to -> from)
+  if (from === to_currency && to === from_currency) {
+    if (conversion_operator === "*") {
+      return amount / curr_rate;
+    } else {
+      return amount * curr_rate;
+    }
+  }
+
+  // If mapping doesn't cover this pair, keep amount unchanged
+  return amount;
+};
+
+// ---- Format for table display (number → "1,234.00") ----
+const formatPriceForTable = (value: number): string => {
+  if (isNaN(value)) return "";
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+};
+
+// ---- Format for input display (string numeric → "1,234.56") ----
+const formatPriceInput = (value: string): string => {
+  const numeric = value.replace(/,/g, "");
+  if (!numeric) return "";
+  const num = Number(numeric);
+  if (isNaN(num)) return "";
+  return num.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
 };
 
 const ServicesForm: React.FC = () => {
@@ -100,7 +185,7 @@ const ServicesForm: React.FC = () => {
     service_name: "",
     service_price: "",
     service_status: "active",
-    service_currency: "USD", // default
+    service_currency: "USD",
   };
 
   const [newService, setNewService] = useState<NewService>(emptyServiceForm);
@@ -121,7 +206,7 @@ const ServicesForm: React.FC = () => {
             ? row.service_price
             : Number(row.service_price ?? 0),
         service_status: (row.service_status || "active") as ServiceStatus,
-        service_currency: (row.service_currency || "USD") as Currency, // 👈 map from API
+        service_currency: (row.service_currency || "USD") as Currency,
       }));
 
       setServices(mapped);
@@ -160,7 +245,6 @@ const ServicesForm: React.FC = () => {
       const aVal = a[orderBy];
       const bVal = b[orderBy];
 
-      // numeric sort for price
       if (orderBy === "service_price") {
         const aNum = Number(aVal ?? 0);
         const bNum = Number(bVal ?? 0);
@@ -198,7 +282,7 @@ const ServicesForm: React.FC = () => {
       service_name: "",
       service_price: "",
       service_status: "active",
-      service_currency: "USD", // reset to default
+      service_currency: "USD",
     });
 
     setOpenServiceModal(true);
@@ -211,19 +295,19 @@ const ServicesForm: React.FC = () => {
     setEditingId(null);
   };
 
-  // ---- Validation ----
   const validateForm = (): boolean => {
     const errors: FormErrors = {};
 
+    const priceRaw = newService.service_price.replace(/,/g, "");
     if (!newService.service_name.trim()) {
       errors.service_name = "Service name is required";
     }
 
-    if (!newService.service_price.trim()) {
+    if (!priceRaw.trim()) {
       errors.service_price = "Price is required";
-    } else if (isNaN(Number(newService.service_price))) {
+    } else if (isNaN(Number(priceRaw))) {
       errors.service_price = "Price must be numeric";
-    } else if (Number(newService.service_price) < 0) {
+    } else if (Number(priceRaw) < 0) {
       errors.service_price = "Price cannot be negative";
     }
 
@@ -238,15 +322,17 @@ const ServicesForm: React.FC = () => {
       return;
     }
 
+    const cleanPrice = newService.service_price.replace(/,/g, "");
+
     try {
       await saveService({
         idservice:
           modalMode === "edit" && editingId != null ? editingId : undefined,
         service_code: newService.service_code,
         service_name: newService.service_name,
-        service_price: newService.service_price,
+        service_price: cleanPrice,
         service_status: newService.service_status,
-        service_currency: newService.service_currency, // 👈 sent to backend
+        service_currency: newService.service_currency,
       });
 
       handleCloseServiceModal();
@@ -268,6 +354,7 @@ const ServicesForm: React.FC = () => {
     setNewService({
       service_code: s.service_code || "",
       service_name: s.service_name || "",
+      // store raw numeric string (no commas)
       service_price:
         s.service_price != null ? s.service_price.toString() : "",
       service_status: s.service_status || "active",
@@ -307,6 +394,41 @@ const ServicesForm: React.FC = () => {
   const handleFieldChange = (key: keyof NewService, value: string) => {
     setNewService((prev) => ({ ...prev, [key]: value as any }));
     setFormErrors((prev) => ({ ...prev, [key]: undefined }));
+  };
+
+  // ---- Currency change inside dialog: convert price using localStorage settings ----
+  const handleCurrencyChange = (newCurrency: Currency) => {
+    setNewService((prev) => {
+      const oldCurrency = prev.service_currency;
+
+      if (oldCurrency === newCurrency) {
+        return prev;
+      }
+
+      const priceRaw = prev.service_price.replace(/,/g, "");
+      if (!priceRaw.trim()) {
+        return { ...prev, service_currency: newCurrency };
+      }
+
+      const currentAmount = Number(priceRaw);
+      if (isNaN(currentAmount)) {
+        return { ...prev, service_currency: newCurrency };
+      }
+
+      const convertedAmount = convertPriceWithSettings(
+        currentAmount,
+        oldCurrency,
+        newCurrency
+      );
+
+      return {
+        ...prev,
+        service_currency: newCurrency,
+        // store unformatted numeric string in state
+        service_price: convertedAmount.toFixed(2),
+      };
+    });
+    setFormErrors((prev) => ({ ...prev, service_currency: undefined }));
   };
 
   return (
@@ -580,7 +702,7 @@ const ServicesForm: React.FC = () => {
                         textAlign: "right",
                       }}
                     >
-                      {s.service_price.toFixed(2)}
+                      {formatPriceForTable(s.service_price)}
                     </TableCell>
                     <TableCell
                       sx={{
@@ -681,16 +803,19 @@ const ServicesForm: React.FC = () => {
                 label="Price"
                 fullWidth
                 size="small"
-                type="number"
-                value={newService.service_price}
-                onChange={(e) =>
-                  handleFieldChange("service_price", e.target.value)
-                }
+                type="text"
+                value={formatPriceInput(newService.service_price)}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  const numeric = raw.replace(/,/g, "");
+                  handleFieldChange("service_price", numeric);
+                }}
                 error={!!formErrors.service_price}
                 helperText={formErrors.service_price || " "}
                 InputProps={{
                   sx: {
                     fontFamily: tableFontFamily,
+                    textAlign: "right",
                   },
                 }}
                 InputLabelProps={{
@@ -704,10 +829,7 @@ const ServicesForm: React.FC = () => {
                 sx={{ minWidth: 90 }}
                 value={newService.service_currency}
                 onChange={(e) =>
-                  handleFieldChange(
-                    "service_currency",
-                    e.target.value as Currency
-                  )
+                  handleCurrencyChange(e.target.value as Currency)
                 }
                 InputProps={{
                   sx: {

@@ -8,14 +8,22 @@ import {
   InputAdornment,
   IconButton,
 } from "@mui/material";
-import { Visibility, VisibilityOff, Lock, AccountCircle } from "@mui/icons-material";
+import {
+  Visibility,
+  VisibilityOff,
+  Lock,
+  AccountCircle,
+} from "@mui/icons-material";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import logo from "../assets/sdnet_logo.jpg";
 import bg from "../assets/login_bg.jpg";
 import { getEnv } from "../utils/env_functions";
 
-const API_BASE_URL =getEnv("REACT_APP_API_BASE_URL", "http://127.0.0.1:5100");
+const API_BASE_URL = getEnv(
+  "REACT_APP_API_BASE_URL",
+  "http://127.0.0.1:5100"
+);
 
 const LoginForm: React.FC = () => {
   const [username, setUsername] = useState("");
@@ -39,8 +47,28 @@ const LoginForm: React.FC = () => {
       });
 
       if (response.data?.status === "success") {
-        // Optionally store user info in localStorage
-         localStorage.setItem("fullname", JSON.stringify(response.data.fullname));
+        const {
+          fullname,
+          currency_settings,
+          settings: appSettings,
+          // you might also have: idusers, username, mobile, app_token ...
+        } = response.data;
+
+        // Store user info
+        localStorage.setItem("fullname", JSON.stringify(fullname));
+
+        // Store currency settings globally for the app
+        if (currency_settings) {
+          localStorage.setItem(
+            "currency_settings",
+            JSON.stringify(currency_settings)
+          );
+        }
+
+        // Store general settings (like wish phone) globally
+        if (appSettings) {
+          localStorage.setItem("settings", JSON.stringify(appSettings));
+        }
 
         navigate("/home");
       } else {
@@ -130,7 +158,10 @@ const LoginForm: React.FC = () => {
               ),
               endAdornment: (
                 <InputAdornment position="end">
-                  <IconButton onClick={() => setShowPassword(!showPassword)} edge="end">
+                  <IconButton
+                    onClick={() => setShowPassword(!showPassword)}
+                    edge="end"
+                  >
                     {showPassword ? <VisibilityOff /> : <Visibility />}
                   </IconButton>
                 </InputAdornment>
@@ -167,7 +198,12 @@ const LoginForm: React.FC = () => {
           </Button>
         </form>
 
-        <Typography variant="body2" textAlign="center" mt={3} color="text.secondary">
+        <Typography
+          variant="body2"
+          textAlign="center"
+          mt={3}
+          color="text.secondary"
+        >
           Forgot your password?{" "}
           <Typography
             component="span"
@@ -185,7 +221,8 @@ const LoginForm: React.FC = () => {
           mt={4}
           color="text.secondary"
         >
-          © SDSoftware {new Date().getFullYear()}–{new Date().getFullYear() + 1}
+          © SDSoftware {new Date().getFullYear()}–
+          {new Date().getFullYear() + 1}
         </Typography>
       </Paper>
     </Box>

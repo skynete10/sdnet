@@ -59,12 +59,18 @@ type InternetRecord = {
   // 0 => disabled customer, 1 => normal
   customer_status: 0 | 1;
   wish: 0 | 1;
+  // employee manager fields
+  emp_username?: string;
+  emp_fullname?: string;
+  emp_manager?: string; // username of manager/employee responsible
 };
 
+// 🔹 NOW includes payment_status coming from invoices API
 type InvoiceRow = {
   customer_username: string;
   invoice_number: number | null;
   invoiced: 0 | 1;
+  payment_status?: "paid" | "unpaid" | "partial" | null;
 };
 
 type PaymentRow = {
@@ -74,7 +80,12 @@ type PaymentRow = {
   method: string;
 };
 
-const getDisabledRowColor = () => "#b71c1c"; 
+type EmployeeOption = {
+  username: string;
+  fullname: string;
+};
+
+const getDisabledRowColor = () => "#b71c1c";
 
 type Order = "asc" | "desc";
 type SortKey =
@@ -159,6 +170,10 @@ const InternnetManagerForm: React.FC = () => {
     Record<string, InvoiceRow>
   >({});
 
+  const [employees, setEmployees] = useState<EmployeeOption[]>([]);
+  const [selectedEmployee, setSelectedEmployee] = useState<string>(""); // username (emp_manager)
+
+  // 🔹 Merge invoices into base rows INCLUDING payment from payment_status
   const mergeInvoicesIntoRows = (
     baseRows: InternetRecord[],
     invMap: Record<string, InvoiceRow>
@@ -166,14 +181,23 @@ const InternnetManagerForm: React.FC = () => {
     baseRows.map((r) => {
       const inv = invMap[r.username];
       if (!inv) return r;
+
+      // decide payment field based on payment_status from invoices
+      let payment: InternetRecord["payment"] = "unpaid";
+      if (inv.payment_status === "paid") payment = "paid";
+      else if (inv.payment_status === "partial") payment = "partial";
+
       return {
         ...r,
         invoiced: inv.invoiced === 1,
         invoice_number: inv.invoice_number,
+        payment, // 🔥 override payment from invoices.payment_status
       };
     });
 
-  const loadInternetCustomers = async (invMap?: Record<string, InvoiceRow>) => {
+  const loadInternetCustomers = async (
+    invMap?: Record<string, InvoiceRow>
+  ) => {
     setLoading(true);
     setError(null);
     try {
@@ -183,39 +207,50 @@ const InternnetManagerForm: React.FC = () => {
       const apiData = Array.isArray(res.data) ? res.data : [];
 
       const mapped: InternetRecord[] = apiData.map((r: any) => {
-  const due =
-    r?.due_date && typeof r.due_date === "string"
-      ? r.due_date.slice(0, 10)
-      : null;
+        const due =
+          r?.due_date && typeof r.due_date === "string"
+            ? r.due_date.slice(0, 10)
+            : null;
 
         return {
-    id: Number(r.id),
-    username: r.username ?? "",
-    fullname: r.fullname ?? "",
-    city: r.city ?? "",
-    village: r.village ?? "",
-    due_date: due,
-    amount:
-      typeof r.amount === "number" ? r.amount : Number(r.amount ?? 0),
-    invoiced: Boolean(r.invoiced),
-    payment:
-      r.payment === "paid" || r.payment === "partial"
-        ? r.payment
-        : "unpaid",
-    status: r.status === "stopped" ? "stopped" : "active",
-    invoice_number: r.invoice_number ?? null,
-    customer_status:
-      typeof r.customer_status === "number"
-        ? (r.customer_status as 0 | 1)
-        : ((Number(r.customer_status ?? 1) || 1) as 0 | 1),
+          id: Number(r.id),
+          username: r.username ?? "",
+          fullname: r.fullname ?? "",
+          city: r.city ?? "",
+          village: r.village ?? "",
+          due_date: due,
+          amount:
+            typeof r.amount === "number" ? r.amount : Number(r.amount ?? 0),
+          // default payment (will be overridden by invoices if available)
+          payment:
+            r.payment === "paid" || r.payment === "partial"
+              ? r.payment
+              : "unpaid",
+          status: r.status === "stopped" ? "stopped" : "active",
+          invoiced: Boolean(r.invoiced),
+          invoice_number: r.invoice_number ?? null,
+          customer_status:
+            typeof r.customer_status === "number"
+              ? (r.customer_status as 0 | 1)
+              : ((Number(r.customer_status ?? 1) || 1) as 0 | 1),
 
-    // 🔹 NEW: normalize wish to 0 | 1
-    wish:
-      typeof r.wish === "number"
-        ? ((r.wish ? 1 : 0) as 0 | 1)
-        : ((Number(r.wish ?? 0) ? 1 : 0) as 0 | 1),
-  };
-});
+          // normalize wish to 0 | 1
+          wish:
+            typeof r.wish === "number"
+              ? ((r.wish ? 1 : 0) as 0 | 1)
+              : ((Number(r.wish ?? 0) ? 1 : 0) as 0 | 1),
+
+          // employee manager fields from backend
+          emp_username:
+            r.emp_username ?? r.employee_username ?? r.manager_username ?? "",
+          emp_fullname:
+            r.emp_fullname ??
+            r.employee_fullname ??
+            r.manager_fullname ??
+            "",
+          emp_manager: r.emp_manager ?? r.emp_username ?? r.employee_username ?? "",
+        };
+      });
 
       const merged = invMap ? mergeInvoicesIntoRows(mapped, invMap) : mapped;
 
@@ -247,7 +282,7 @@ const InternnetManagerForm: React.FC = () => {
         { params: { month } }
       );
 
-      const apiData: InvoiceRow[] = Array.isArray(res.data) ? res.data : [];
+      const apiData: any[] = Array.isArray(res.data) ? res.data : [];
       const map: Record<string, InvoiceRow> = {};
 
       apiData.forEach((x) => {
@@ -256,11 +291,14 @@ const InternnetManagerForm: React.FC = () => {
             customer_username: x.customer_username,
             invoice_number: x.invoice_number ?? null,
             invoiced: x.invoiced === 1 ? 1 : 0,
+            // 🔹 read payment_status from API
+            payment_status: x.payment_status ?? null,
           };
         }
       });
 
       setInvoicesByUser(map);
+      // 🔹 merge into existing rows so payment column gets updated from invoices
       setRows((prev) => mergeInvoicesIntoRows(prev, map));
     } catch {
       setInvoicesByUser({});
@@ -308,6 +346,19 @@ const InternnetManagerForm: React.FC = () => {
       setFilterDate(m);
       await loadInternetCustomers();
       await loadInvoicesForMonth(m);
+
+      // load employees for filter
+      try {
+        const res = await axios.get(`${API_BASE_URL}/api/employees`);
+        const apiData = Array.isArray(res.data) ? res.data : [];
+        const mapped: EmployeeOption[] = apiData.map((row: any) => ({
+          username: row.username ?? "",
+          fullname: row.fullname ?? "",
+        }));
+        setEmployees(mapped);
+      } catch (e) {
+        console.warn("Could not load employees list", e);
+      }
     })();
   }, []);
 
@@ -323,6 +374,7 @@ const InternnetManagerForm: React.FC = () => {
   const handleApplyDateFilter = async () => {
     setFilterDate(draftFilterDate);
     setSelectedIds(new Set());
+    await loadInternetCustomers();
     await loadInvoicesForMonth(draftFilterDate);
   };
 
@@ -336,9 +388,13 @@ const InternnetManagerForm: React.FC = () => {
     setIsActive(true);
     setPaymentStatus("all");
     setSearchName("");
+    setSelectedEmployee("");
 
     setSelectedIds(new Set());
     setInvoicesByUser({});
+
+    // reload customers with no extra filters
+    loadInternetCustomers();
   };
 
   const handleRequestSort = (property: SortKey) => {
@@ -367,7 +423,17 @@ const InternnetManagerForm: React.FC = () => {
         paymentStatus === "all" ||
         row.payment === paymentStatus;
 
-      return nameMatch && addressMatch && statusMatch && paymentMatch;
+      // employee filter (by emp_manager username)
+      const employeeMatch =
+        !selectedEmployee || row.emp_manager === selectedEmployee;
+
+      return (
+        nameMatch &&
+        addressMatch &&
+        statusMatch &&
+        paymentMatch &&
+        employeeMatch
+      );
     });
 
     return [...filtered].sort((a, b) => {
@@ -403,6 +469,7 @@ const InternnetManagerForm: React.FC = () => {
     selectedAddresses,
     isActive,
     paymentStatus,
+    selectedEmployee,
     order,
     orderBy,
   ]);
@@ -542,9 +609,10 @@ const InternnetManagerForm: React.FC = () => {
       await axios.post(`${API_BASE_URL}/api/internet-manager/billing`, {
         items,
       });
-      if (filterDate) await loadInvoicesForMonth(filterDate);
     } catch (e) {
       // optional rollback that single row if needed
+    } finally {
+      if (filterDate) await loadInvoicesForMonth(filterDate);
     }
   };
 
@@ -662,7 +730,12 @@ const InternnetManagerForm: React.FC = () => {
     setRows((prev) =>
       prev.map((r) =>
         ids.includes(r.id)
-          ? { ...r, invoiced: false, payment: "unpaid", invoice_number: null }
+          ? {
+              ...r,
+              invoiced: false,
+              payment: "unpaid",
+              invoice_number: null,
+            }
           : r
       )
     );
@@ -1011,6 +1084,34 @@ const InternnetManagerForm: React.FC = () => {
               ))}
             </Select>
           </FormControl>
+
+          {/* Employee filter (by emp_manager username) */}
+          <FormControl size="small" fullWidth>
+            <InputLabel
+              sx={{ fontFamily: tableFontFamily, fontSize: "0.85rem" }}
+            >
+              Employee
+            </InputLabel>
+            <Select
+              label="Employee"
+              value={selectedEmployee}
+              onChange={(e) => {
+                const val = e.target.value as string;
+                setSelectedEmployee(val);
+                setSelectedIds(new Set());
+              }}
+              sx={{ fontFamily: tableFontFamily, fontSize: "0.9rem" }}
+            >
+              <MenuItem value="">
+                <em>All Employees</em>
+              </MenuItem>
+              {employees.map((emp) => (
+                <MenuItem key={emp.username} value={emp.username}>
+                  {emp.fullname} ({emp.username})
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
         </Stack>
 
         <Stack
@@ -1275,7 +1376,7 @@ const InternnetManagerForm: React.FC = () => {
                 color: "#00695c",
                 fontFamily: tableFontFamily,
                 bgcolor: "white",
-                "&:hover": { bgcolor: "#f1f5f9" },
+                "&:hover": { bgcolor: "#f1f59" },
               }}
             >
               Print selected invoices
@@ -1380,13 +1481,27 @@ const InternnetManagerForm: React.FC = () => {
                   "invoice_number",
                   "right"
                 )}
+
+                {/* Last column: Employee Manager */}
+                <TableCell
+                  sx={{
+                    fontWeight: 700,
+                    fontSize: "0.95rem",
+                    color: "#fff",
+                    whiteSpace: "nowrap",
+                    backgroundColor: "#004d40",
+                    textAlign: "center",
+                  }}
+                >
+                  Employee Manager
+                </TableCell>
               </TableRow>
             </TableHead>
 
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={14} align="center">
+                  <TableCell colSpan={15} align="center">
                     <Typography variant="body2" color="text.secondary">
                       Loading...
                     </Typography>
@@ -1394,7 +1509,7 @@ const InternnetManagerForm: React.FC = () => {
                 </TableRow>
               ) : filteredAndSortedRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={14} align="center">
+                  <TableCell colSpan={15} align="center">
                     <Typography variant="body2" color="text.secondary">
                       No records found.
                     </Typography>
@@ -1404,40 +1519,44 @@ const InternnetManagerForm: React.FC = () => {
                 filteredAndSortedRows.map((row) => {
                   const isChecked = selectedIds.has(row.id);
                   const isDisabledRow = row.customer_status === 0;
-                  const baseBg = getPaymentRowColor(row.payment);
 
                   return (
                     <TableRow
-  key={row.id}
-  hover={!["stopped"].includes(row.status)}   // ❌ disable hover for stopped rows
-  onDoubleClick={() => {
-    if (row.status !== "stopped") handleRowDoubleClick(row);
-  }}
-  sx={{
-    cursor: row.status === "stopped" ? "not-allowed" : "pointer",
-    backgroundColor:
-      row.status === "stopped"
-        ? "#b71c1c" // 🔴 dark red for disabled customers
-        : getPaymentRowColor(row.payment),
-    opacity: row.status === "stopped" ? 0.7 : 1,
-    "&:hover": {
-      backgroundColor:
-        row.status === "stopped"
-          ? "#b71c1c"
-          : getPaymentRowColor(row.payment),
-      filter: row.status === "stopped" ? "none" : "brightness(0.97)",
-    },
-  }}
->
+                      key={row.id}
+                      hover={row.status !== "stopped"}
+                      onDoubleClick={() => {
+                        if (row.status !== "stopped")
+                          handleRowDoubleClick(row);
+                      }}
+                      sx={{
+                        cursor:
+                          row.status === "stopped" ? "not-allowed" : "pointer",
+                        backgroundColor:
+                          row.status === "stopped"
+                            ? getDisabledRowColor()
+                            : getPaymentRowColor(row.payment),
+                        opacity: row.status === "stopped" ? 0.7 : 1,
+                        "&:hover": {
+                          backgroundColor:
+                            row.status === "stopped"
+                              ? getDisabledRowColor()
+                              : getPaymentRowColor(row.payment),
+                          filter:
+                            row.status === "stopped"
+                              ? "none"
+                              : "brightness(0.97)",
+                        },
+                      }}
+                    >
                       <TableCell sx={{ width: 50, textAlign: "center" }}>
-  {row.wish === 1 ? (
-    <img
-      src={WishLogo}
-      alt="Wish Money"
-      style={{ width: 38, height: 38, borderRadius: 4 }}
-    />
-  ) : null}
-</TableCell>
+                        {row.wish === 1 ? (
+                          <img
+                            src={WishLogo}
+                            alt="Wish Money"
+                            style={{ width: 38, height: 38, borderRadius: 4 }}
+                          />
+                        ) : null}
+                      </TableCell>
 
                       <TableCell sx={{ width: 40, textAlign: "center" }}>
                         <Checkbox
@@ -1528,6 +1647,15 @@ const InternnetManagerForm: React.FC = () => {
 
                       <TableCell align="right">
                         {row.invoice_number ?? ""}
+                      </TableCell>
+
+                      {/* Employee Manager cell */}
+                      <TableCell>
+                        {row.emp_fullname
+                          ? `${row.emp_fullname}${
+                              row.emp_username ? ` (${row.emp_username})` : ""
+                            }`
+                          : row.emp_username || row.emp_manager || ""}
                       </TableCell>
                     </TableRow>
                   );

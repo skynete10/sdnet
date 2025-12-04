@@ -217,6 +217,8 @@ const EmployeesForm: React.FC = () => {
     setOrderBy(property);
   };
 
+  
+
   const filteredAndSortedEmployees = useMemo(() => {
     const filtered = employees.filter((e) => {
       const nameMatch =
@@ -512,9 +514,9 @@ const EmployeesForm: React.FC = () => {
         });
 
         // Delete customer users (and their addresses) from DB
-        await axios.post(`${API_BASE_URL}/api/employees/delete-customers`, {
-          cust_usernames: toUnassign,
-        });
+        //await axios.post(`${API_BASE_URL}/api/employees/delete-customers`, {
+         // cust_usernames: toUnassign,
+       // });
       }
 
       // Reload lists so dialog stays in sync

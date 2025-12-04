@@ -10,15 +10,18 @@ import {
   MenuItem,
 } from "@mui/material";
 import axios from "axios";
+import wishMoneyLogo from "../assets/wishmoneylogo.png";
 
 const API_BASE_URL = "http://127.0.0.1:5100";
 
 type Currency = "USD" | "LBP";
 
 type CurrencySettings = {
-  default_currency: Currency;
+  from_currency: Currency;
+  to_currency: Currency;
   conversion_operator: "*" | "/";
   curr_rate: number;
+  wish_money_phone: string;
 };
 
 const tableFontFamily =
@@ -26,9 +29,30 @@ const tableFontFamily =
 
 const SettingsForm: React.FC = () => {
   const [settings, setSettings] = useState<CurrencySettings>({
-    default_currency: "LBP",
+    from_currency: "USD",
+    to_currency: "LBP",
     conversion_operator: "*",
     curr_rate: 90000,
+    wish_money_phone: "",
+  });
+
+  // Baselines for section-level reset
+  const [currencyBaseline, setCurrencyBaseline] = useState<{
+    from_currency: Currency;
+    to_currency: Currency;
+    conversion_operator: "*" | "/";
+    curr_rate: number;
+  }>({
+    from_currency: "USD",
+    to_currency: "LBP",
+    conversion_operator: "*",
+    curr_rate: 90000,
+  });
+
+  const [paymentBaseline, setPaymentBaseline] = useState<{
+    wish_money_phone: string;
+  }>({
+    wish_money_phone: "",
   });
 
   const [loading, setLoading] = useState(false);
@@ -36,29 +60,50 @@ const SettingsForm: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  // ---- Load settings from API (optionally for a specific currency) ----
-  const loadSettings = async (currency?: Currency) => {
+  // ---- Load currency settings from API ----
+  const loadCurrencySettings = async (opts?: {
+    from?: Currency;
+    to?: Currency;
+  }) => {
     setLoading(true);
     setError(null);
     setSuccess(null);
 
     try {
-      const res = await axios.get(`${API_BASE_URL}/api/settings/currency`, {
-        params: currency ? { default_currency: currency } : undefined,
-      });
+      const params =
+        opts?.from && opts?.to
+          ? { from_currency: opts.from, to_currency: opts.to }
+          : undefined;
 
+      const res = await axios.get(`${API_BASE_URL}/api/settings/currency`, {
+        params,
+      });
       const data = res.data as Partial<CurrencySettings>;
 
-      setSettings((prev) => ({
-        default_currency:
-          (data.default_currency as Currency) ??
-          currency ??
-          prev.default_currency,
+      const newSettings: CurrencySettings = {
+        from_currency:
+          (data.from_currency as Currency) ?? settings.from_currency,
+        to_currency: (data.to_currency as Currency) ?? settings.to_currency,
         conversion_operator:
-          (data.conversion_operator as "*" | "/") ?? prev.conversion_operator,
+          (data.conversion_operator as "*" | "/") ??
+          settings.conversion_operator,
         curr_rate:
-          typeof data.curr_rate === "number" ? data.curr_rate : prev.curr_rate,
-      }));
+          typeof data.curr_rate === "number"
+            ? data.curr_rate
+            : settings.curr_rate,
+        // Don't overwrite the phone here – handled separately
+        wish_money_phone: settings.wish_money_phone,
+      };
+
+      setSettings(newSettings);
+
+      // Update currency baseline from latest API data
+      setCurrencyBaseline({
+        from_currency: newSettings.from_currency,
+        to_currency: newSettings.to_currency,
+        conversion_operator: newSettings.conversion_operator,
+        curr_rate: newSettings.curr_rate,
+      });
     } catch (err: any) {
       console.error("Failed to load currency settings", err);
       const apiError = err?.response?.data?.error;
@@ -68,9 +113,37 @@ const SettingsForm: React.FC = () => {
     }
   };
 
-  // initial load (no specific currency)
+  // ---- Load Wish Money phone from /api/settings/wish ----
+  const loadWishSettings = async () => {
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/settings/wish`);
+      // Expected response: { title: "wish", number: "..." | null }
+      const data = res.data as { title?: string; number?: string | null };
+
+      const phone = data.number || "";
+
+      setSettings((prev) => ({
+        ...prev,
+        wish_money_phone: phone,
+      }));
+
+      setPaymentBaseline({
+        wish_money_phone: phone,
+      });
+    } catch (err: any) {
+      console.error("Failed to load wish number", err);
+      const apiError = err?.response?.data?.error;
+      setError(apiError || "Failed to load Wish Money phone.");
+    }
+  };
+
+  // initial load
   useEffect(() => {
-    loadSettings();
+    // load currency (first row or defaults)
+    loadCurrencySettings();
+    // load wish phone separately
+    loadWishSettings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleFieldChange = <K extends keyof CurrencySettings>(
@@ -83,25 +156,19 @@ const SettingsForm: React.FC = () => {
     }));
   };
 
-  // When default currency changes → call API to get operator + rate for that currency
-  const handleDefaultCurrencyChange = (newCurrency: Currency) => {
-    // optimistically update the selected currency
-    setSettings((prev) => ({
-      ...prev,
-      default_currency: newCurrency,
-    }));
-    // then fetch its settings from backend
-    loadSettings(newCurrency);
-  };
-
-  const handleSave = async () => {
+  // ---- SAVE handlers ----
+  const handleSaveCurrency = async () => {
     setSaving(true);
     setError(null);
     setSuccess(null);
 
-    // simple frontend validation to mirror backend
-    if (!["USD", "LBP"].includes(settings.default_currency)) {
-      setError("Default currency must be USD or LBP.");
+    if (!["USD", "LBP"].includes(settings.from_currency)) {
+      setError("From currency must be USD or LBP.");
+      setSaving(false);
+      return;
+    }
+    if (!["USD", "LBP"].includes(settings.to_currency)) {
+      setError("To currency must be USD or LBP.");
       setSaving(false);
       return;
     }
@@ -111,14 +178,29 @@ const SettingsForm: React.FC = () => {
       return;
     }
     if (!settings.curr_rate || settings.curr_rate <= 0) {
-      setError("USD → LBP rate must be greater than zero.");
+      setError("Rate must be greater than zero.");
       setSaving(false);
       return;
     }
 
     try {
-      await axios.post(`${API_BASE_URL}/api/settings/currency`, settings);
-      setSuccess("Settings saved successfully.");
+      // Backend uses from_currency / to_currency / operator / curr_rate
+      await axios.post(`${API_BASE_URL}/api/settings/currency`, {
+        from_currency: settings.from_currency,
+        to_currency: settings.to_currency,
+        conversion_operator: settings.conversion_operator,
+        curr_rate: settings.curr_rate,
+      });
+
+      setSuccess("Currency settings saved successfully.");
+
+      // Update currency baseline after successful save
+      setCurrencyBaseline({
+        from_currency: settings.from_currency,
+        to_currency: settings.to_currency,
+        conversion_operator: settings.conversion_operator,
+        curr_rate: settings.curr_rate,
+      });
     } catch (err: any) {
       console.error("Failed to save currency settings", err);
       const apiError = err?.response?.data?.error;
@@ -126,6 +208,81 @@ const SettingsForm: React.FC = () => {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleSavePayment = async () => {
+    setSaving(true);
+    setError(null);
+    setSuccess(null);
+
+    if (!settings.wish_money_phone) {
+      setError("Wish Money phone number is required.");
+      setSaving(false);
+      return;
+    }
+
+    try {
+      // New endpoint: save wish number in settings table
+      await axios.post(`${API_BASE_URL}/api/settings/wish`, {
+        number: settings.wish_money_phone,
+      });
+
+      setSuccess("Payment info saved successfully.");
+
+      // Update payment baseline after successful save
+      setPaymentBaseline({
+        wish_money_phone: settings.wish_money_phone,
+      });
+    } catch (err: any) {
+      console.error("Failed to save payment info", err);
+      const apiError = err?.response?.data?.error;
+      setError(apiError || "Failed to save payment info.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ---- RESET handlers (section-only) ----
+  const handleResetCurrency = () => {
+    setSettings((prev) => ({
+      ...prev,
+      from_currency: currencyBaseline.from_currency,
+      to_currency: currencyBaseline.to_currency,
+      conversion_operator: currencyBaseline.conversion_operator,
+      curr_rate: currencyBaseline.curr_rate,
+    }));
+    setError(null);
+    setSuccess(null);
+  };
+
+  const handleResetPayment = () => {
+    setSettings((prev) => ({
+      ...prev,
+      wish_money_phone: paymentBaseline.wish_money_phone,
+    }));
+    setError(null);
+    setSuccess(null);
+  };
+
+  // ---- Handlers that also reload operator + rate from backend ----
+  const handleFromCurrencyChange = (newFrom: Currency) => {
+    // update from_currency locally
+    setSettings((prev) => ({
+      ...prev,
+      from_currency: newFrom,
+    }));
+    // fetch operator/rate for this pair
+    loadCurrencySettings({ from: newFrom, to: settings.to_currency });
+  };
+
+  const handleToCurrencyChange = (newTo: Currency) => {
+    // update to_currency locally
+    setSettings((prev) => ({
+      ...prev,
+      to_currency: newTo,
+    }));
+    // fetch operator/rate for this pair
+    loadCurrencySettings({ from: settings.from_currency, to: newTo });
   };
 
   return (
@@ -157,7 +314,8 @@ const SettingsForm: React.FC = () => {
             variant="body2"
             sx={{ opacity: 0.9, fontFamily: tableFontFamily }}
           >
-            Configure global currency options used across salary modules.
+            Configure global currency and payment options used across salary
+            modules.
           </Typography>
         </Box>
 
@@ -165,7 +323,13 @@ const SettingsForm: React.FC = () => {
           <Button
             variant="outlined"
             size="small"
-            onClick={() => loadSettings()}
+            onClick={() => {
+              loadCurrencySettings({
+                from: settings.from_currency,
+                to: settings.to_currency,
+              });
+              loadWishSettings();
+            }}
             disabled={loading || saving}
             sx={{
               textTransform: "none",
@@ -179,7 +343,7 @@ const SettingsForm: React.FC = () => {
               },
             }}
           >
-            {loading ? "Refreshing..." : "Reload"}
+            {loading ? "Refreshing..." : "Reload from server"}
           </Button>
         </Stack>
       </Paper>
@@ -204,7 +368,7 @@ const SettingsForm: React.FC = () => {
         </Typography>
       )}
 
-      {/* Main settings card */}
+      {/* Currency Settings section */}
       <Paper
         sx={{
           p: 2.5,
@@ -229,7 +393,7 @@ const SettingsForm: React.FC = () => {
             Currency Settings
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            These values are used for salary calculations and conversions.
+            Define conversion from one currency to another.
           </Typography>
         </Stack>
 
@@ -240,16 +404,44 @@ const SettingsForm: React.FC = () => {
           spacing={2}
           alignItems={{ xs: "stretch", md: "flex-start" }}
         >
-          {/* Default currency */}
+          {/* From currency */}
           <TextField
             select
-            label="Default Currency"
+            label="From Currency"
             variant="outlined"
             size="small"
             fullWidth
-            value={settings.default_currency}
+            value={settings.from_currency}
             onChange={(e) =>
-              handleDefaultCurrencyChange(e.target.value as Currency)
+              handleFromCurrencyChange(e.target.value as Currency)
+            }
+            InputProps={{
+              sx: {
+                fontFamily: tableFontFamily,
+                fontSize: "0.9rem",
+              },
+            }}
+            InputLabelProps={{
+              sx: {
+                fontFamily: tableFontFamily,
+                fontSize: "0.85rem",
+              },
+            }}
+          >
+            <MenuItem value="USD">USD</MenuItem>
+            <MenuItem value="LBP">LBP</MenuItem>
+          </TextField>
+
+          {/* To currency */}
+          <TextField
+            select
+            label="To Currency"
+            variant="outlined"
+            size="small"
+            fullWidth
+            value={settings.to_currency}
+            onChange={(e) =>
+              handleToCurrencyChange(e.target.value as Currency)
             }
             InputProps={{
               sx: {
@@ -271,7 +463,7 @@ const SettingsForm: React.FC = () => {
           {/* Conversion operator */}
           <TextField
             select
-            label="Operator (USD ↔ LBP)"
+            label="Operator"
             variant="outlined"
             size="small"
             fullWidth
@@ -299,9 +491,9 @@ const SettingsForm: React.FC = () => {
             <MenuItem value="/">÷ Divide</MenuItem>
           </TextField>
 
-          {/* USD → LBP rate */}
+          {/* Rate */}
           <TextField
-            label="USD → LBP Rate"
+            label="Rate"
             variant="outlined"
             size="small"
             fullWidth
@@ -336,7 +528,7 @@ const SettingsForm: React.FC = () => {
           <Button
             variant="outlined"
             size="small"
-            onClick={() => loadSettings(settings.default_currency)}
+            onClick={handleResetCurrency}
             disabled={loading || saving}
             sx={{
               textTransform: "none",
@@ -349,7 +541,7 @@ const SettingsForm: React.FC = () => {
           <Button
             variant="contained"
             size="small"
-            onClick={handleSave}
+            onClick={handleSaveCurrency}
             disabled={saving}
             sx={{
               textTransform: "none",
@@ -361,7 +553,120 @@ const SettingsForm: React.FC = () => {
               },
             }}
           >
-            {saving ? "Saving..." : "Save Settings"}
+            {saving ? "Saving..." : "Save Currency"}
+          </Button>
+        </Box>
+      </Paper>
+
+      {/* Payment Info / Wish Money section */}
+      <Paper
+        sx={{
+          p: 2.5,
+          borderRadius: 2,
+          boxShadow: 2,
+          borderLeft: "4px solid #ffb300",
+          backgroundColor: "#fffef7",
+          fontFamily: tableFontFamily,
+        }}
+      >
+        <Stack
+          direction="row"
+          justifyContent="space-between"
+          alignItems={{ xs: "flex-start", md: "center" }}
+          spacing={2}
+          mb={2}
+        >
+          <Stack direction="row" spacing={1.5} alignItems="center">
+            <Box
+              component="img"
+              src={wishMoneyLogo}
+              alt="Wish Money"
+              sx={{
+                width: 26,
+                height: 26,
+                objectFit: "contain",
+                borderRadius: "4px",
+              }}
+            />
+            <Typography
+              variant="subtitle1"
+              sx={{ fontWeight: 600, color: "text.secondary" }}
+            >
+              Wish Money – Payment Info
+            </Typography>
+          </Stack>
+
+          <Typography variant="caption" color="text.secondary">
+            Phone number used for Wish Money payments.
+          </Typography>
+        </Stack>
+
+        <Divider sx={{ mb: 2 }} />
+
+        <TextField
+          label="Wish Money Phone"
+          variant="outlined"
+          size="small"
+          fullWidth
+          type="tel"
+          inputMode="numeric"
+          value={settings.wish_money_phone}
+          onChange={(e) => {
+            const onlyDigits = e.target.value.replace(/\D/g, "");
+            handleFieldChange("wish_money_phone", onlyDigits);
+          }}
+          InputProps={{
+            sx: {
+              fontFamily: tableFontFamily,
+              fontSize: "0.9rem",
+            },
+          }}
+          InputLabelProps={{
+            sx: {
+              fontFamily: tableFontFamily,
+              fontSize: "0.85rem",
+            },
+          }}
+          helperText="Enter the phone number linked to Wish Money."
+        />
+
+        <Box
+          sx={{
+            mt: 3,
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 1.5,
+          }}
+        >
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={handleResetPayment}
+            disabled={loading || saving}
+            sx={{
+              textTransform: "none",
+              fontWeight: 600,
+              fontFamily: tableFontFamily,
+            }}
+          >
+            Reset
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={handleSavePayment}
+            disabled={saving}
+            sx={{
+              textTransform: "none",
+              fontWeight: 600,
+              fontFamily: tableFontFamily,
+              backgroundColor: "#ffb300",
+              "&:hover": {
+                backgroundColor: "#ffa000",
+              },
+            }}
+          >
+            {saving ? "Saving..." : "Save Payment Info"}
           </Button>
         </Box>
       </Paper>
