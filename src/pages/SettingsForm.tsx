@@ -8,6 +8,10 @@ import {
   Button,
   Divider,
   MenuItem,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
 } from "@mui/material";
 import axios from "axios";
 import wishMoneyLogo from "../assets/wishmoneylogo.png";
@@ -59,6 +63,12 @@ const SettingsForm: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  // NEW: dialog to tell user to logout/login
+  const [showReLoginDialog, setShowReLoginDialog] = useState(false);
+
+  const openReLoginDialog = () => setShowReLoginDialog(true);
+  const closeReLoginDialog = () => setShowReLoginDialog(false);
 
   // ---- Load currency settings from API ----
   const loadCurrencySettings = async (opts?: {
@@ -201,6 +211,9 @@ const SettingsForm: React.FC = () => {
         conversion_operator: settings.conversion_operator,
         curr_rate: settings.curr_rate,
       });
+
+      // Show dialog asking user to logout/login
+      openReLoginDialog();
     } catch (err: any) {
       console.error("Failed to save currency settings", err);
       const apiError = err?.response?.data?.error;
@@ -233,6 +246,9 @@ const SettingsForm: React.FC = () => {
       setPaymentBaseline({
         wish_money_phone: settings.wish_money_phone,
       });
+
+      // Show dialog asking user to logout/login
+      openReLoginDialog();
     } catch (err: any) {
       console.error("Failed to save payment info", err);
       const apiError = err?.response?.data?.error;
@@ -286,263 +302,424 @@ const SettingsForm: React.FC = () => {
   };
 
   return (
-    <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
-      {/* Header bar */}
-      <Paper
-        sx={{
-          p: 2,
-          borderRadius: 2,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 2,
-          background:
-            "linear-gradient(90deg, rgba(0,77,64,1) 0%, rgba(0,121,107,1) 40%, rgba(0,150,136,1) 100%)",
-          color: "#fff",
-          boxShadow: 4,
-          fontFamily: tableFontFamily,
-        }}
-      >
-        <Box>
-          <Typography
-            variant="h5"
-            sx={{ fontWeight: 700, mb: 0.5, fontFamily: tableFontFamily }}
-          >
-            Settings
-          </Typography>
-          <Typography
-            variant="body2"
-            sx={{ opacity: 0.9, fontFamily: tableFontFamily }}
-          >
-            Configure global currency and payment options used across salary
-            modules.
-          </Typography>
-        </Box>
-
-        <Stack direction="row" spacing={1.5} alignItems="center">
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={() => {
-              loadCurrencySettings({
-                from: settings.from_currency,
-                to: settings.to_currency,
-              });
-              loadWishSettings();
-            }}
-            disabled={loading || saving}
-            sx={{
-              textTransform: "none",
-              fontWeight: 600,
-              fontFamily: tableFontFamily,
-              borderColor: "#e0f2f1",
-              color: "#ffffff",
-              "&:hover": {
-                borderColor: "#ffffff",
-                backgroundColor: "rgba(255,255,255,0.12)",
-              },
-            }}
-          >
-            {loading ? "Refreshing..." : "Reload from server"}
-          </Button>
-        </Stack>
-      </Paper>
-
-      {error && (
-        <Typography
-          variant="body2"
-          color="error"
-          sx={{ mb: 1, textAlign: "right", fontFamily: tableFontFamily }}
-        >
-          {error}
-        </Typography>
-      )}
-
-      {success && (
-        <Typography
-          variant="body2"
-          color="success.main"
-          sx={{ mb: 1, textAlign: "right", fontFamily: tableFontFamily }}
-        >
-          {success}
-        </Typography>
-      )}
-
-      {/* Currency Settings section */}
-      <Paper
-        sx={{
-          p: 2.5,
-          borderRadius: 2,
-          boxShadow: 2,
-          borderLeft: "4px solid #00897b",
-          backgroundColor: "#fafafa",
-          fontFamily: tableFontFamily,
-        }}
-      >
-        <Stack
-          direction="row"
-          justifyContent="space-between"
-          alignItems={{ xs: "flex-start", md: "center" }}
-          spacing={2}
-          mb={2}
-        >
-          <Typography
-            variant="subtitle1"
-            sx={{ fontWeight: 600, color: "text.secondary" }}
-          >
-            Currency Settings
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
-            Define conversion from one currency to another.
-          </Typography>
-        </Stack>
-
-        <Divider sx={{ mb: 2 }} />
-
-        <Stack
-          direction={{ xs: "column", md: "row" }}
-          spacing={2}
-          alignItems={{ xs: "stretch", md: "flex-start" }}
-        >
-          {/* From currency */}
-          <TextField
-            select
-            label="From Currency"
-            variant="outlined"
-            size="small"
-            fullWidth
-            value={settings.from_currency}
-            onChange={(e) =>
-              handleFromCurrencyChange(e.target.value as Currency)
-            }
-            InputProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.9rem",
-              },
-            }}
-            InputLabelProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.85rem",
-              },
-            }}
-          >
-            <MenuItem value="USD">USD</MenuItem>
-            <MenuItem value="LBP">LBP</MenuItem>
-          </TextField>
-
-          {/* To currency */}
-          <TextField
-            select
-            label="To Currency"
-            variant="outlined"
-            size="small"
-            fullWidth
-            value={settings.to_currency}
-            onChange={(e) =>
-              handleToCurrencyChange(e.target.value as Currency)
-            }
-            InputProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.9rem",
-              },
-            }}
-            InputLabelProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.85rem",
-              },
-            }}
-          >
-            <MenuItem value="USD">USD</MenuItem>
-            <MenuItem value="LBP">LBP</MenuItem>
-          </TextField>
-
-          {/* Conversion operator */}
-          <TextField
-            select
-            label="Operator"
-            variant="outlined"
-            size="small"
-            fullWidth
-            value={settings.conversion_operator}
-            onChange={(e) =>
-              handleFieldChange(
-                "conversion_operator",
-                e.target.value as "*" | "/"
-              )
-            }
-            InputProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.9rem",
-              },
-            }}
-            InputLabelProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.85rem",
-              },
-            }}
-          >
-            <MenuItem value="*">× Multiply</MenuItem>
-            <MenuItem value="/">÷ Divide</MenuItem>
-          </TextField>
-
-          {/* Rate */}
-          <TextField
-            label="Rate"
-            variant="outlined"
-            size="small"
-            fullWidth
-            type="number"
-            value={settings.curr_rate}
-            onChange={(e) =>
-              handleFieldChange("curr_rate", Number(e.target.value || 0))
-            }
-            InputProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.9rem",
-              },
-            }}
-            InputLabelProps={{
-              sx: {
-                fontFamily: tableFontFamily,
-                fontSize: "0.85rem",
-              },
-            }}
-          />
-        </Stack>
-
-        <Box
+    <>
+      <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 2 }}>
+        {/* Header bar */}
+        <Paper
           sx={{
-            mt: 3,
+            p: 2,
+            borderRadius: 2,
             display: "flex",
-            justifyContent: "flex-end",
-            gap: 1.5,
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 2,
+            background:
+              "linear-gradient(90deg, rgba(0,77,64,1) 0%, rgba(0,121,107,1) 40%, rgba(0,150,136,1) 100%)",
+            color: "#fff",
+            boxShadow: 4,
+            fontFamily: tableFontFamily,
           }}
         >
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={handleResetCurrency}
-            disabled={loading || saving}
+          <Box>
+            <Typography
+              variant="h5"
+              sx={{ fontWeight: 700, mb: 0.5, fontFamily: tableFontFamily }}
+            >
+              Settings
+            </Typography>
+            <Typography
+              variant="body2"
+              sx={{ opacity: 0.9, fontFamily: tableFontFamily }}
+            >
+              Configure global currency and payment options used across salary
+              modules.
+            </Typography>
+          </Box>
+
+          <Stack direction="row" spacing={1.5} alignItems="center">
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => {
+                loadCurrencySettings({
+                  from: settings.from_currency,
+                  to: settings.to_currency,
+                });
+                loadWishSettings();
+              }}
+              disabled={loading || saving}
+              sx={{
+                textTransform: "none",
+                fontWeight: 600,
+                fontFamily: tableFontFamily,
+                borderColor: "#e0f2f1",
+                color: "#ffffff",
+                "&:hover": {
+                  borderColor: "#ffffff",
+                  backgroundColor: "rgba(255,255,255,0.12)",
+                },
+              }}
+            >
+              {loading ? "Refreshing..." : "Reload from server"}
+            </Button>
+          </Stack>
+        </Paper>
+
+        {error && (
+          <Typography
+            variant="body2"
+            color="error"
+            sx={{ mb: 1, textAlign: "right", fontFamily: tableFontFamily }}
+          >
+            {error}
+          </Typography>
+        )}
+
+        {success && (
+          <Typography
+            variant="body2"
+            color="success.main"
+            sx={{ mb: 1, textAlign: "right", fontFamily: tableFontFamily }}
+          >
+            {success}
+          </Typography>
+        )}
+
+        {/* Currency Settings section */}
+        <Paper
+          sx={{
+            p: 2.5,
+            borderRadius: 2,
+            boxShadow: 2,
+            borderLeft: "4px solid #00897b",
+            backgroundColor: "#fafafa",
+            fontFamily: tableFontFamily,
+          }}
+        >
+          <Stack
+            direction="row"
+            justifyContent="space-between"
+            alignItems={{ xs: "flex-start", md: "center" }}
+            spacing={2}
+            mb={2}
+          >
+            <Typography
+              variant="subtitle1"
+              sx={{ fontWeight: 600, color: "text.secondary" }}
+            >
+              Currency Settings
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Define conversion from one currency to another.
+            </Typography>
+          </Stack>
+
+          <Divider sx={{ mb: 2 }} />
+
+          <Stack
+            direction={{ xs: "column", md: "row" }}
+            spacing={2}
+            alignItems={{ xs: "stretch", md: "flex-start" }}
+          >
+            {/* From currency */}
+            <TextField
+              select
+              label="From Currency"
+              variant="outlined"
+              size="small"
+              fullWidth
+              value={settings.from_currency}
+              onChange={(e) =>
+                handleFromCurrencyChange(e.target.value as Currency)
+              }
+              InputProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                  fontSize: "0.9rem",
+                },
+              }}
+              InputLabelProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                  fontSize: "0.85rem",
+                },
+              }}
+            >
+              <MenuItem value="USD">USD</MenuItem>
+              <MenuItem value="LBP">LBP</MenuItem>
+            </TextField>
+
+            {/* To currency */}
+            <TextField
+              select
+              label="To Currency"
+              variant="outlined"
+              size="small"
+              fullWidth
+              value={settings.to_currency}
+              onChange={(e) =>
+                handleToCurrencyChange(e.target.value as Currency)
+              }
+              InputProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                  fontSize: "0.9rem",
+                },
+              }}
+              InputLabelProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                  fontSize: "0.85rem",
+                },
+              }}
+            >
+              <MenuItem value="USD">USD</MenuItem>
+              <MenuItem value="LBP">LBP</MenuItem>
+            </TextField>
+
+            {/* Conversion operator */}
+            <TextField
+              select
+              label="Operator"
+              variant="outlined"
+              size="small"
+              fullWidth
+              value={settings.conversion_operator}
+              onChange={(e) =>
+                handleFieldChange(
+                  "conversion_operator",
+                  e.target.value as "*" | "/"
+                )
+              }
+              InputProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                  fontSize: "0.9rem",
+                },
+              }}
+              InputLabelProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                  fontSize: "0.85rem",
+                },
+              }}
+            >
+              <MenuItem value="*">× Multiply</MenuItem>
+              <MenuItem value="/">÷ Divide</MenuItem>
+            </TextField>
+
+            {/* Rate */}
+            <TextField
+              label="Rate"
+              variant="outlined"
+              size="small"
+              fullWidth
+              type="number"
+              value={settings.curr_rate}
+              onChange={(e) =>
+                handleFieldChange("curr_rate", Number(e.target.value || 0))
+              }
+              InputProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                  fontSize: "0.9rem",
+                },
+              }}
+              InputLabelProps={{
+                sx: {
+                  fontFamily: tableFontFamily,
+                  fontSize: "0.85rem",
+                },
+              }}
+            />
+          </Stack>
+
+          <Box
             sx={{
-              textTransform: "none",
-              fontWeight: 600,
-              fontFamily: tableFontFamily,
+              mt: 3,
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: 1.5,
             }}
           >
-            Reset
-          </Button>
-          <Button
-            variant="contained"
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={handleResetCurrency}
+              disabled={loading || saving}
+              sx={{
+                textTransform: "none",
+                fontWeight: 600,
+                fontFamily: tableFontFamily,
+              }}
+            >
+              Reset
+            </Button>
+            <Button
+              variant="contained"
+              size="small"
+              onClick={handleSaveCurrency}
+              disabled={saving}
+              sx={{
+                textTransform: "none",
+                fontWeight: 600,
+                fontFamily: tableFontFamily,
+                backgroundColor: "#00897b",
+                "&:hover": {
+                  backgroundColor: "#00695c",
+                },
+              }}
+            >
+              {saving ? "Saving..." : "Save Currency"}
+            </Button>
+          </Box>
+        </Paper>
+
+        {/* Payment Info / Wish Money section */}
+        <Paper
+          sx={{
+            p: 2.5,
+            borderRadius: 2,
+            boxShadow: 2,
+            borderLeft: "4px solid #ffb300",
+            backgroundColor: "#fffef7",
+            fontFamily: tableFontFamily,
+          }}
+        >
+          <Stack
+            direction="row"
+            justifyContent="space-between"
+            alignItems={{ xs: "flex-start", md: "center" }}
+            spacing={2}
+            mb={2}
+          >
+            <Stack direction="row" spacing={1.5} alignItems="center">
+              <Box
+                component="img"
+                src={wishMoneyLogo}
+                alt="Wish Money"
+                sx={{
+                  width: 26,
+                  height: 26,
+                  objectFit: "contain",
+                  borderRadius: "4px",
+                }}
+              />
+              <Typography
+                variant="subtitle1"
+                sx={{ fontWeight: 600, color: "text.secondary" }}
+              >
+                Wish Money – Payment Info
+              </Typography>
+            </Stack>
+
+            <Typography variant="caption" color="text.secondary">
+              Phone number used for Wish Money payments.
+            </Typography>
+          </Stack>
+
+          <Divider sx={{ mb: 2 }} />
+
+          <TextField
+            label="Wish Money Phone"
+            variant="outlined"
             size="small"
-            onClick={handleSaveCurrency}
-            disabled={saving}
+            fullWidth
+            type="tel"
+            inputMode="numeric"
+            value={settings.wish_money_phone}
+            onChange={(e) => {
+              const onlyDigits = e.target.value.replace(/\D/g, "");
+              handleFieldChange("wish_money_phone", onlyDigits);
+            }}
+            InputProps={{
+              sx: {
+                fontFamily: tableFontFamily,
+                fontSize: "0.9rem",
+              },
+            }}
+            InputLabelProps={{
+              sx: {
+                fontFamily: tableFontFamily,
+                fontSize: "0.85rem",
+              },
+            }}
+            helperText="Enter the phone number linked to Wish Money."
+          />
+
+          <Box
+            sx={{
+              mt: 3,
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: 1.5,
+            }}
+          >
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={handleResetPayment}
+              disabled={loading || saving}
+              sx={{
+                textTransform: "none",
+                fontWeight: 600,
+                fontFamily: tableFontFamily,
+              }}
+            >
+              Reset
+            </Button>
+            <Button
+              variant="contained"
+              size="small"
+              onClick={handleSavePayment}
+              disabled={saving}
+              sx={{
+                textTransform: "none",
+                fontWeight: 600,
+                fontFamily: tableFontFamily,
+                backgroundColor: "#ffb300",
+                "&:hover": {
+                  backgroundColor: "#ffa000",
+                },
+              }}
+            >
+              {saving ? "Saving..." : "Save Payment Info"}
+            </Button>
+          </Box>
+        </Paper>
+      </Box>
+
+      {/* Re-login dialog */}
+      <Dialog
+        open={showReLoginDialog}
+        onClose={closeReLoginDialog}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle
+          sx={{
+            fontFamily: tableFontFamily,
+            fontWeight: 700,
+            background:
+              "linear-gradient(90deg, rgba(0,150,136,1) 0%, rgba(255,179,0,1) 100%)",
+            color: "#fff",
+          }}
+        >
+          Settings saved successfully
+        </DialogTitle>
+        <DialogContent sx={{ pt: 2.5 }}>
+          <Typography
+            variant="body2"
+            sx={{ fontFamily: tableFontFamily, lineHeight: 1.6 }}
+          >
+            Your changes have been saved. To apply the new settings across the
+            system, please log out and log in again.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button
+            onClick={closeReLoginDialog}
+            variant="contained"
             sx={{
               textTransform: "none",
               fontWeight: 600,
@@ -553,124 +730,11 @@ const SettingsForm: React.FC = () => {
               },
             }}
           >
-            {saving ? "Saving..." : "Save Currency"}
+            Got it
           </Button>
-        </Box>
-      </Paper>
-
-      {/* Payment Info / Wish Money section */}
-      <Paper
-        sx={{
-          p: 2.5,
-          borderRadius: 2,
-          boxShadow: 2,
-          borderLeft: "4px solid #ffb300",
-          backgroundColor: "#fffef7",
-          fontFamily: tableFontFamily,
-        }}
-      >
-        <Stack
-          direction="row"
-          justifyContent="space-between"
-          alignItems={{ xs: "flex-start", md: "center" }}
-          spacing={2}
-          mb={2}
-        >
-          <Stack direction="row" spacing={1.5} alignItems="center">
-            <Box
-              component="img"
-              src={wishMoneyLogo}
-              alt="Wish Money"
-              sx={{
-                width: 26,
-                height: 26,
-                objectFit: "contain",
-                borderRadius: "4px",
-              }}
-            />
-            <Typography
-              variant="subtitle1"
-              sx={{ fontWeight: 600, color: "text.secondary" }}
-            >
-              Wish Money – Payment Info
-            </Typography>
-          </Stack>
-
-          <Typography variant="caption" color="text.secondary">
-            Phone number used for Wish Money payments.
-          </Typography>
-        </Stack>
-
-        <Divider sx={{ mb: 2 }} />
-
-        <TextField
-          label="Wish Money Phone"
-          variant="outlined"
-          size="small"
-          fullWidth
-          type="tel"
-          inputMode="numeric"
-          value={settings.wish_money_phone}
-          onChange={(e) => {
-            const onlyDigits = e.target.value.replace(/\D/g, "");
-            handleFieldChange("wish_money_phone", onlyDigits);
-          }}
-          InputProps={{
-            sx: {
-              fontFamily: tableFontFamily,
-              fontSize: "0.9rem",
-            },
-          }}
-          InputLabelProps={{
-            sx: {
-              fontFamily: tableFontFamily,
-              fontSize: "0.85rem",
-            },
-          }}
-          helperText="Enter the phone number linked to Wish Money."
-        />
-
-        <Box
-          sx={{
-            mt: 3,
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: 1.5,
-          }}
-        >
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={handleResetPayment}
-            disabled={loading || saving}
-            sx={{
-              textTransform: "none",
-              fontWeight: 600,
-              fontFamily: tableFontFamily,
-            }}
-          >
-            Reset
-          </Button>
-          <Button
-            variant="contained"
-            size="small"
-            onClick={handleSavePayment}
-            disabled={saving}
-            sx={{
-              textTransform: "none",
-              fontWeight: 600,
-              fontFamily: tableFontFamily,
-              backgroundColor: "#ffb300",
-              "&:hover": {
-                backgroundColor: "#ffa000",
-              },
-            }}
-          >
-            {saving ? "Saving..." : "Save Payment Info"}
-          </Button>
-        </Box>
-      </Paper>
-    </Box>
+        </DialogActions>
+      </Dialog>
+    </>
   );
 };
 

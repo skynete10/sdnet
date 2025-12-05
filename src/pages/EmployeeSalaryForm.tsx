@@ -14,7 +14,6 @@ import {
   Button,
   TableSortLabel,
   Divider,
-  InputAdornment,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -31,26 +30,68 @@ import * as XLSX from "xlsx";
 
 const API_BASE_URL = "http://127.0.0.1:5100";
 
-// ⚠️ Replace with your real USD↔LBP rate or pass as prop
-const USD_RATE = 90000;
-
 type Currency = "USD" | "LBP";
 
-// Safely read env and map to Currency with fallback
-const getCurrencyEnv = (key: string, fallback: Currency): Currency => {
-  try {
-    const val =
-      typeof process !== "undefined" && process.env
-        ? process.env[key]
-        : undefined;
+// ---- Currency settings from localStorage (same pattern as ServicesForm) ----
+type CurrencySettingsLS = {
+  from_currency: Currency;
+  to_currency: Currency;
+  conversion_operator: "*" | "/";
+  curr_rate: number;
+};
 
-    if (val === "USD" || val === "LBP") {
-      return val;
+const getCurrencySettingsFromLocalStorage = (): CurrencySettingsLS | null => {
+  if (typeof window === "undefined") return null;
+  const raw = localStorage.getItem("currency_settings");
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      (parsed.from_currency === "USD" || parsed.from_currency === "LBP") &&
+      (parsed.to_currency === "USD" || parsed.to_currency === "LBP") &&
+      (parsed.conversion_operator === "*" ||
+        parsed.conversion_operator === "/") &&
+      typeof parsed.curr_rate === "number"
+    ) {
+      return parsed as CurrencySettingsLS;
     }
-    return fallback;
+    return null;
   } catch {
-    return fallback;
+    return null;
   }
+};
+
+// Convert using localStorage settings (like convertPriceWithSettings)
+const convertAmount = (amount: number, from: Currency, to: Currency): number => {
+  if (from === to) return amount;
+
+  const cs = getCurrencySettingsFromLocalStorage();
+  if (!cs) return amount;
+
+  const { from_currency, to_currency, conversion_operator, curr_rate } = cs;
+
+  // Case 1: direct mapping (from -> to)
+  if (from === from_currency && to === to_currency) {
+    if (conversion_operator === "*") {
+      return amount * curr_rate;
+    } else {
+      return amount / curr_rate;
+    }
+  }
+
+  // Case 2: inverse mapping (to -> from)
+  if (from === to_currency && to === from_currency) {
+    if (conversion_operator === "*") {
+      return amount / curr_rate;
+    } else {
+      return amount * curr_rate;
+    }
+  }
+
+  // If mapping doesn't cover this pair, keep amount unchanged
+  return amount;
 };
 
 type Employee = {
@@ -84,6 +125,22 @@ const tableFontFamily =
   '"Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif';
 
 // Base currencies from .env
+const getCurrencyEnv = (key: string, fallback: Currency): Currency => {
+  try {
+    const val =
+      typeof process !== "undefined" && process.env
+        ? process.env[key]
+        : undefined;
+
+    if (val === "USD" || val === "LBP") {
+      return val;
+    }
+    return fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 const CURR_BASE1: Currency = getCurrencyEnv("REACT_APP_CURR_BASE1", "USD");
 const CURR_BASE2: Currency = getCurrencyEnv("REACT_APP_CURR_BASE2", "LBP");
 
@@ -93,19 +150,6 @@ const getCurrentMonthYYYYMM = () => {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   return `${yyyy}-${mm}`;
-};
-
-// Simple conversion helper
-const convertAmount = (
-  amount: number,
-  from: Currency,
-  to: Currency,
-  rate: number = USD_RATE
-): number => {
-  if (from === to) return amount;
-  if (from === "USD" && to === "LBP") return amount * rate;
-  if (from === "LBP" && to === "USD") return amount / rate;
-  return amount;
 };
 
 // Extra rows added via dialog
@@ -251,7 +295,7 @@ const EmployeeSalaryForm: React.FC = () => {
     });
   }, [employees, nameFilter, mobileFilter, addressFilter, order, orderBy]);
 
-  // ---- Helper: save any salary field to backend (including net_amount) ----
+  // ---- Helper: save any salary field to backend (including net_amount, currency) ----
   const saveSalaryField = async (
     emp: Employee,
     field: "salary_amount" | "currency" | "net_amount",
@@ -295,13 +339,13 @@ const EmployeeSalaryForm: React.FC = () => {
     );
   };
 
-  // On blur / Enter: save salary and update net_amount as well
+  // On blur / Enter: save salary and update net_amount as well (same value)
   const handleSalaryFieldBlur = async (emp: Employee, value: string) => {
     if (value === "") {
       return;
     }
     const num = Number(value);
-    if (Number.isNaN(num)) {
+       if (Number.isNaN(num)) {
       setError("Salary amount must be a valid number.");
       return;
     }
@@ -322,48 +366,8 @@ const EmployeeSalaryForm: React.FC = () => {
     await saveSalaryField(emp, "net_amount", value);
   };
 
-  // ---- Toggle currency per row (USD / LBP) + convert amount ----
-  const handleToggleCurrency = async (emp: Employee) => {
-    const currentCurrency: Currency = emp.currency ?? "LBP";
-    const targetCurrency: Currency =
-      currentCurrency === "USD" ? "LBP" : "USD";
-
-    let newAmount = emp.salary_amount;
-
-    if (emp.salary_amount != null) {
-      newAmount = convertAmount(
-        emp.salary_amount,
-        currentCurrency,
-        targetCurrency
-      );
-    }
-
-    setEmployees((prev) =>
-      prev.map((e) =>
-        e.id === emp.id
-          ? {
-              ...e,
-              currency: targetCurrency,
-              salary_amount: newAmount,
-              net_amount:
-                e.net_amount != null
-                  ? convertAmount(e.net_amount, currentCurrency, targetCurrency)
-                  : e.net_amount,
-            }
-          : e
-      )
-    );
-
-    await saveSalaryField(emp, "currency", targetCurrency);
-
-    if (newAmount != null) {
-      await saveSalaryField(emp, "salary_amount", newAmount.toString());
-      await saveSalaryField(emp, "net_amount", newAmount.toString());
-    }
-  };
-
-  // ---- Double click row: open dialog to add extra row ----
-  const handleRowDoubleClick = (emp: Employee) => {
+  // ---- Open dialog for extra row (triggered by $ button) ----
+  const handleRowExtraClick = (emp: Employee) => {
     setDialogEmployee(emp);
     const defaultAmount = emp.salary_amount ?? 0;
     const defaultNet = emp.net_amount ?? defaultAmount;
@@ -388,7 +392,7 @@ const EmployeeSalaryForm: React.FC = () => {
     }
   };
 
-  const handleDialogAdd = () => {
+  const handleDialogAdd = async () => {
     if (!dialogEmployee) return;
 
     const amountNum = Number(dialogAmount);
@@ -411,27 +415,32 @@ const EmployeeSalaryForm: React.FC = () => {
       date: dialogDate,
     };
 
+    // ---- Update net amount in primary row (in its own currency) ----
+    const baseCurrency: Currency = dialogEmployee.currency ?? CURR_BASE1;
+    const netInBase = convertAmount(netNum, dialogCurrency, baseCurrency);
+
+    const currentNet = dialogEmployee.net_amount ?? 0;
+    const updatedNet = currentNet + netInBase;
+
+    // Update extraRows + employee net_amount in UI
     setExtraRows((prev) => ({
       ...prev,
       [empId]: [...(prev[empId] || []), row],
     }));
-
-    // ---- Update net amount in primary row ----
-    const baseCurrency: Currency =
-      dialogEmployee.currency ?? CURR_BASE1;
-
-    const netInBase = convertAmount(netNum, dialogCurrency, baseCurrency);
 
     setEmployees((prev) =>
       prev.map((e) =>
         e.id === empId
           ? {
               ...e,
-              net_amount: (e.net_amount ?? 0) + netInBase,
+              net_amount: updatedNet,
             }
           : e
       )
     );
+
+    // Sync net_amount to backend
+    await saveSalaryField(dialogEmployee, "net_amount", updatedNet.toString());
 
     setOpenDialog(false);
   };
@@ -441,38 +450,44 @@ const EmployeeSalaryForm: React.FC = () => {
   };
 
   // ---- Delete extra row ----
-  const handleDeleteExtraRow = (empId: number, rowId: number) => {
-    setExtraRows((prev) => {
-      const rows = prev[empId] || [];
-      const rowToDelete = rows.find((r) => r.id === rowId);
-      if (!rowToDelete) return prev;
+  const handleDeleteExtraRow = async (empId: number, rowId: number) => {
+    const emp = employees.find((e) => e.id === empId);
+    if (!emp) return;
 
-      const updatedRows = rows.filter((r) => r.id !== rowId);
+    const rows = extraRows[empId] || [];
+    const rowToDelete = rows.find((r) => r.id === rowId);
+    if (!rowToDelete) return;
 
-      // Adjust primary net_amount by subtracting this extra's net in base currency
-      setEmployees((prevEmps) =>
-        prevEmps.map((e) => {
-          if (e.id !== empId) return e;
+    const baseCurrency: Currency = emp.currency ?? CURR_BASE1;
+    const netInBase = convertAmount(
+      rowToDelete.netAmount,
+      rowToDelete.currency,
+      baseCurrency
+    );
 
-          const baseCurrency: Currency = e.currency ?? CURR_BASE1;
-          const netInBase = convertAmount(
-            rowToDelete.netAmount,
-            rowToDelete.currency,
-            baseCurrency
-          );
+    const currentNet = emp.net_amount ?? 0;
+    const updatedNet = currentNet - netInBase;
 
-          return {
-            ...e,
-            net_amount: (e.net_amount ?? 0) - netInBase,
-          };
-        })
-      );
+    // Update employees net_amount
+    setEmployees((prevEmps) =>
+      prevEmps.map((e) =>
+        e.id === empId
+          ? {
+              ...e,
+              net_amount: updatedNet,
+            }
+          : e
+      )
+    );
 
-      return {
-        ...prev,
-        [empId]: updatedRows,
-      };
-    });
+    // Remove the extra row
+    setExtraRows((prev) => ({
+      ...prev,
+      [empId]: (prev[empId] || []).filter((r) => r.id !== rowId),
+    }));
+
+    // Sync net_amount to backend
+    await saveSalaryField(emp, "net_amount", updatedNet.toString());
   };
 
   // ---- Import Excel ----
@@ -825,6 +840,18 @@ const EmployeeSalaryForm: React.FC = () => {
                 {renderSortableHeaderCell("Username", "username")}
                 {renderSortableHeaderCell("Full Name", "fullname")}
                 {renderSortableHeaderCell("Salary Amount", "salary_amount")}
+                <TableCell
+                  sx={{
+                    fontFamily: tableFontFamily,
+                    fontWeight: 700,
+                    fontSize: "0.95rem",
+                    color: "#fff",
+                    whiteSpace: "nowrap",
+                    userSelect: "none",
+                  }}
+                >
+                  Currency
+                </TableCell>
                 {renderSortableHeaderCell("Payment", "payment_method")}
                 {renderSortableHeaderCell(
                   `Net Amount (${CURR_BASE1})`,
@@ -842,12 +869,25 @@ const EmployeeSalaryForm: React.FC = () => {
                 >
                   {`Net Amount (${CURR_BASE2})`}
                 </TableCell>
+                <TableCell
+                  sx={{
+                    fontFamily: tableFontFamily,
+                    fontWeight: 700,
+                    fontSize: "0.95rem",
+                    color: "#fff",
+                    whiteSpace: "nowrap",
+                    userSelect: "none",
+                    textAlign: "center",
+                  }}
+                >
+                  Extra
+                </TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {filteredAndSortedEmployees.length === 0 ? (
                 <TableRow tabIndex={-1}>
-                  <TableCell colSpan={6} align="center">
+                  <TableCell colSpan={8} align="center">
                     <Typography
                       variant="body2"
                       color="text.secondary"
@@ -885,7 +925,6 @@ const EmployeeSalaryForm: React.FC = () => {
                       <TableRow
                         tabIndex={-1}
                         hover
-                        onDoubleClick={() => handleRowDoubleClick(e)}
                         sx={{
                           backgroundColor:
                             index % 2 === 0
@@ -917,7 +956,7 @@ const EmployeeSalaryForm: React.FC = () => {
                           {e.fullname}
                         </TableCell>
 
-                        {/* Editable salary_amount + USD/LBP switch */}
+                        {/* Editable salary_amount */}
                         <TableCell
                           sx={{
                             fontSize: "0.9rem",
@@ -948,28 +987,6 @@ const EmployeeSalaryForm: React.FC = () => {
                               }
                             }}
                             InputProps={{
-                              endAdornment: (
-                                <InputAdornment position="end">
-                                  <Button
-                                    size="small"
-                                    variant="outlined"
-                                    sx={{
-                                      ml: 1,
-                                      textTransform: "none",
-                                      borderRadius: 2,
-                                      px: 1.5,
-                                      py: 0.2,
-                                      fontSize: "0.75rem",
-                                      borderColor: "#009688",
-                                      color: "#00695c",
-                                    }}
-                                    onClick={() => handleToggleCurrency(e)}
-                                  >
-                                    {/* show CURRENT currency */}
-                                    {e.currency ?? "LBP"}
-                                  </Button>
-                                </InputAdornment>
-                              ),
                               style: {
                                 fontFamily: tableFontFamily,
                                 fontSize: "0.85rem",
@@ -977,6 +994,99 @@ const EmployeeSalaryForm: React.FC = () => {
                               },
                             }}
                           />
+                        </TableCell>
+
+                        {/* Separate Currency column (ComboBox) with conversion like ServicesForm */}
+                        <TableCell
+                          sx={{
+                            fontSize: "0.9rem",
+                            fontWeight: 500,
+                          }}
+                        >
+                          <TextField
+                            select
+                            size="small"
+                            fullWidth
+                            value={e.currency ?? "LBP"}
+                            onChange={async (ev) => {
+                              const newCurrency = ev.target.value as Currency;
+                              const oldCurrency = e.currency ?? "LBP";
+
+                              if (oldCurrency === newCurrency) {
+                                return;
+                              }
+
+                              // compute converted amounts using localStorage settings
+                              const oldSalary = e.salary_amount ?? 0;
+                              const oldNet = e.net_amount ?? 0;
+
+                              const newSalary =
+                                e.salary_amount != null
+                                  ? convertAmount(
+                                      oldSalary,
+                                      oldCurrency,
+                                      newCurrency
+                                    )
+                                  : undefined;
+
+                              const newNet =
+                                e.net_amount != null
+                                  ? convertAmount(
+                                      oldNet,
+                                      oldCurrency,
+                                      newCurrency
+                                    )
+                                  : undefined;
+
+                              // update UI
+                              setEmployees((prev) =>
+                                prev.map((emp) =>
+                                  emp.id === e.id
+                                    ? {
+                                        ...emp,
+                                        currency: newCurrency,
+                                        salary_amount: newSalary,
+                                        net_amount: newNet,
+                                      }
+                                    : emp
+                                )
+                              );
+
+                              // persist currency
+                              await saveSalaryField(e, "currency", newCurrency);
+
+                              // persist salary + net if they exist
+                              if (newSalary != null) {
+                                await saveSalaryField(
+                                  e,
+                                  "salary_amount",
+                                  newSalary.toString()
+                                );
+                              }
+                              if (newNet != null) {
+                                await saveSalaryField(
+                                  e,
+                                  "net_amount",
+                                  newNet.toString()
+                                );
+                              }
+                            }}
+                            InputProps={{
+                              sx: {
+                                fontFamily: tableFontFamily,
+                                fontSize: "0.85rem",
+                                textAlign: "center",
+                              },
+                            }}
+                            InputLabelProps={{
+                              sx: {
+                                fontFamily: tableFontFamily,
+                              },
+                            }}
+                          >
+                            <MenuItem value="USD">USD</MenuItem>
+                            <MenuItem value="LBP">LBP</MenuItem>
+                          </TextField>
                         </TableCell>
 
                         {/* READ-ONLY payment_method */}
@@ -1008,6 +1118,29 @@ const EmployeeSalaryForm: React.FC = () => {
                           }}
                         >
                           {netBase2 != null ? netBase2.toFixed(2) : ""}
+                        </TableCell>
+
+                        {/* New "Extra" column with $ button to open dialog */}
+                        <TableCell
+                          sx={{
+                            fontSize: "0.9rem",
+                            fontWeight: 500,
+                            textAlign: "center",
+                          }}
+                        >
+                          <Tooltip title="Add extra salary entry">
+                            <IconButton
+                              size="small"
+                              onClick={() => handleRowExtraClick(e)}
+                            >
+                              <Typography
+                                component="span"
+                                sx={{ fontWeight: 700, fontSize: "1rem" }}
+                              >
+                                $
+                              </Typography>
+                            </IconButton>
+                          </Tooltip>
                         </TableCell>
                       </TableRow>
 
@@ -1057,7 +1190,15 @@ const EmployeeSalaryForm: React.FC = () => {
                                 fontSize: "0.85rem",
                               }}
                             >
-                              {r.amount.toFixed(2)} {r.currency}
+                              {r.amount.toFixed(2)}
+                            </TableCell>
+                            {/* Currency for extra row */}
+                            <TableCell
+                              sx={{
+                                fontSize: "0.85rem",
+                              }}
+                            >
+                              {r.currency}
                             </TableCell>
                             <TableCell
                               sx={{
@@ -1095,6 +1236,12 @@ const EmployeeSalaryForm: React.FC = () => {
                                 </IconButton>
                               </Tooltip>
                             </TableCell>
+                            {/* Empty cell under "Extra" column */}
+                            <TableCell
+                              sx={{
+                                fontSize: "0.85rem",
+                              }}
+                            />
                           </TableRow>
                         );
                       })}
